@@ -1,0 +1,67 @@
+{
+    "name": "@guru-fund/sdk",
+    "version": "0.1.0",
+    "description": "Guru Protocol SDK — quote + transaction builders for on-chain managed funds.",
+    "license": "MIT",
+    "type": "module",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        },
+        "./internal/helpers/compareAddresses": {
+            "types": "./dist/helpers/compareAddresses.d.ts",
+            "default": "./dist/helpers/compareAddresses.js"
+        },
+        "./internal/helpers/ReceiptParser": {
+            "types": "./dist/helpers/ReceiptParser.d.ts",
+            "default": "./dist/helpers/ReceiptParser.js"
+        },
+        "./internal/helpers/FundDataFetcher": {
+            "types": "./dist/helpers/FundDataFetcher.d.ts",
+            "default": "./dist/helpers/FundDataFetcher.js"
+        },
+        "./internal/router/poolHelper": {
+            "types": "./dist/router/poolHelper.d.ts",
+            "default": "./dist/router/poolHelper.js"
+        },
+        "./internal/types/Fund": {
+            "types": "./dist/types/Fund.d.ts",
+            "default": "./dist/types/Fund.js"
+        },
+        "./internal/constants": {
+            "types": "./dist/constants.d.ts",
+            "default": "./dist/constants.js"
+        },
+        "./typechain/common": {
+            "types": "./dist/typechain/common.d.ts",
+            "default": "./dist/typechain/common.js"
+        }
+    },
+    "files": [
+        "dist",
+        "LICENSE",
+        "README.md"
+    ],
+    "publishConfig": {
+        "access": "public"
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.build.json && node scripts/fix-esm-imports.mjs dist",
+        "clean": "rm -rf dist .turbo tsconfig.build.tsbuildinfo",
+        "typecheck": "tsc --noEmit",
+        "test": "node --import tsx --test test/*.test.ts",
+        "prepack": "pnpm run build"
+    },
+    "dependencies": {
+        "ethers": "=6.15.0",
+        "zod": "3.25.76"
+    },
+    "devDependencies": {
+        "@types/node": "^20",
+        "tsx": "4.20.3",
+        "typescript": "5.9.2"
+    }
+}
