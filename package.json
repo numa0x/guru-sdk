@@ -1,6 +1,6 @@
 {
     "name": "@guru-fund/sdk",
-    "version": "0.1.0",
+    "version": "0.2.1",
     "description": "Guru Protocol SDK — quote + transaction builders for on-chain managed funds.",
     "license": "MIT",
     "type": "module",

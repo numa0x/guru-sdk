@@ -17,8 +17,8 @@ export interface TypedDeferredTopicFilter<_TCEvent extends TypedContractEvent>
   extends DeferredTopicFilter {}
 
 export interface TypedContractEvent<
-  InputTuple extends Array<any> = any,
-  OutputTuple extends Array<any> = any,
+  InputTuple extends Array<any> = Array<any>,
+  OutputTuple extends Array<any> = Array<any>,
   OutputObject = any
 > {
   (...args: Partial<InputTuple>): TypedDeferredTopicFilter<
