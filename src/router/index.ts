@@ -257,8 +257,10 @@ async function _priceViaDirectStablePool(
         .catch(() => null)
     if (!route) return null
 
-    return (BigInt(route.data.amountToReceive) * 10n ** 18n) /
-        Token.unitFor(stableDecimals)
+    const amountToReceive = BigInt(route.data.amountToReceive)
+    if (amountToReceive === 0n) return null
+
+    return (amountToReceive * 10n ** 18n) / Token.unitFor(stableDecimals)
 }
 
 /**
