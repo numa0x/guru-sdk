@@ -14,6 +14,76 @@ export interface GetFallbackRouteContext {
     getSwapFeePercentage: () => Promise<bigint>
 }
 
+async function tryDirectAerodromeV2RouteIn(
+    poolHelper: PoolHelper,
+    {
+        tokenIn,
+        tokenOut,
+        amountIn,
+        slippage,
+        finalization,
+    }: {
+        tokenIn: string
+        tokenOut: string
+        amountIn: bigint
+        slippage: bigint
+        finalization: Parameters<
+            PoolHelper['getStableForTokenQuote']
+        >[0]['finalization']
+    }
+): Promise<Route | null> {
+    const factory = poolHelper.addresses.factories.aerodromeV2
+    if (!factory || !poolHelper.addresses.adapters.aerodromeV2) return null
+
+    try {
+        const route = await poolHelper.getStableForTokenQuote({
+            path: [tokenIn, tokenOut],
+            inputAmount: amountIn,
+            slippage,
+            exchangeFactory: factory,
+            finalization,
+        })
+        return { ...route, hops: 1 }
+    } catch {
+        return null
+    }
+}
+
+async function tryDirectAerodromeV2RouteOut(
+    poolHelper: PoolHelper,
+    {
+        tokenIn,
+        tokenOut,
+        amountIn,
+        slippage,
+        finalization,
+    }: {
+        tokenIn: string
+        tokenOut: string
+        amountIn: bigint
+        slippage: bigint
+        finalization: Parameters<
+            PoolHelper['getTokensForStableQuote']
+        >[0]['finalization']
+    }
+): Promise<Route | null> {
+    const factory = poolHelper.addresses.factories.aerodromeV2
+    if (!factory || !poolHelper.addresses.adapters.aerodromeV2) return null
+
+    try {
+        const route = await poolHelper.getTokensForStableQuote({
+            path: [tokenIn, tokenOut],
+            inputAmount: amountIn,
+            slippage,
+            exchangeFactory: factory,
+            finalization,
+        })
+        return { ...route, hops: 1 }
+    } catch {
+        return null
+    }
+}
+
 /**
  * Deposit fallback: build a route assuming `tokenIn → WETH → tokenOut`. If
  * `tokenOut` is WETH itself, the path collapses to a direct swap. Mirrors
@@ -58,6 +128,15 @@ export async function getFallbackRouteIn(
             finalization,
         })
     }
+
+    const directAerodrome = await tryDirectAerodromeV2RouteIn(poolHelper, {
+        tokenIn,
+        tokenOut,
+        amountIn,
+        slippage,
+        finalization,
+    })
+    if (directAerodrome) return directAerodrome
 
     const pool = await poolHelper.getUniswapCompatibleTokenPool(tokenOut)
     const path: [string, string, string] = [tokenIn, weth, tokenOut]
@@ -118,6 +197,15 @@ export async function getFallbackRouteOut(
 
         return { ...route, hops: 1 }
     }
+
+    const directAerodrome = await tryDirectAerodromeV2RouteOut(poolHelper, {
+        tokenIn,
+        tokenOut,
+        amountIn,
+        slippage,
+        finalization,
+    })
+    if (directAerodrome) return directAerodrome
 
     const pool = await poolHelper.getUniswapCompatibleTokenPool(tokenIn)
     const path: [string, string, string] = [tokenIn, weth, tokenOut]

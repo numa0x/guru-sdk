@@ -6,6 +6,12 @@ import type { GuruProtocolChainId } from '../addresses'
 import type { PrefixTx } from './simulation'
 
 export type V2Path = string[]
+export type AeroV2Route = {
+    from: string
+    to: string
+    stable: boolean
+    factory: string
+}
 export type V4PathHop = {
     tokenIn: string
     tokenOut: string
@@ -39,6 +45,7 @@ export type V3Path = V3PathHop[]
 
 export type CachedPath =
     | { type: 'v2'; path: V2Path; hops: number }
+    | { type: 'aerodromeV2'; path: V2Path; routes: AeroV2Route[]; hops: number }
     | { type: 'v3'; path: V3Path; hops: number }
     | { type: 'v4'; path: V4Path; hops: number }
     | false
@@ -133,6 +140,15 @@ export interface VeloraDataV2 {
     gasUSD: string
 }
 
+export interface VeloraDataAerodromeV2 extends VeloraDataV2 {
+    pools?: {
+        stable?: boolean
+        address?: string
+        fee?: number
+        direction?: boolean
+    }[]
+}
+
 export interface VeloraDataV3 {
     path: V3PathHop[]
     gasUSD: string
@@ -160,5 +176,7 @@ export interface VeloraDataV4 {
 }
 
 export type VeloraRouteResponseV2 = VeloraRouteResponse<VeloraDataV2>
+export type VeloraRouteResponseAerodromeV2 =
+    VeloraRouteResponse<VeloraDataAerodromeV2>
 export type VeloraRouteResponseV3 = VeloraRouteResponse<VeloraDataV3>
 export type VeloraRouteResponseV4 = VeloraRouteResponse<VeloraDataV4>

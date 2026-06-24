@@ -10,6 +10,7 @@ import type {
     CachedPath,
     V3Path,
     V4Path,
+    VeloraRouteResponseAerodromeV2,
     VeloraRouteResponse,
     VeloraRouteResponseV2,
     VeloraRouteResponseV3,
@@ -41,6 +42,23 @@ export function extractPathFromResponse(
 ): CachedPath {
     if (dex === 'UniswapV4') {
         return extractV4Path(response as VeloraRouteResponseV4)
+    }
+
+    if (dex === 'AerodromeV2') {
+        const v2Response = response as VeloraRouteResponseAerodromeV2
+        const exchange =
+            v2Response.priceRoute.bestRoute[0]!.swaps[0]!.swapExchanges[0]!
+        const path = exchange.data.path
+        if (!Array.isArray(path) || typeof path[0] !== 'string') {
+            throw new Error('Unexpected Aerodrome V2 path structure')
+        }
+        const routes = path.slice(0, -1).map((from, i) => ({
+            from,
+            to: path[i + 1]!,
+            stable: Boolean(exchange.data.pools?.[i]?.stable),
+            factory: exchange.data.factory,
+        }))
+        return { type: 'aerodromeV2', path, routes, hops: path.length - 1 }
     }
 
     if (dex === 'UniswapV2' || dex === 'PancakeSwapV2') {

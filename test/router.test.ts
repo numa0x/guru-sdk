@@ -2,9 +2,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { tryWithVeloraFallback } from '../src/router'
+import { getGuruProtocolAddresses } from '../src/addresses'
 import type { Route } from '../src/router'
+import { SUPPORTED_DEXS } from '../src/router/constants'
+import { extractPathFromResponse } from '../src/router/pathCache'
 import type PoolHelper from '../src/router/poolHelper'
 import { quoteWethTrade } from '../src/router/quoteWethTrade'
+import { buildVeloraDexConfig } from '../src/router/velora'
+import type { VeloraRouteResponseAerodromeV2 } from '../src/router/types'
 
 const fakeRoute = (label: string): Route => ({
     adapter: '0xadapter',
@@ -191,6 +196,53 @@ test('quoteWethTrade finalizes fallback min-out through max slippage when sims f
 
     assert.equal(route.data.amountToReceive, 940n)
     assert.equal(route.toll.amount, 2n)
+})
+
+test('Base Velora config enables Aerodrome V2 routes', () => {
+    const addresses = getGuruProtocolAddresses(8453)
+    const cfg = buildVeloraDexConfig(addresses)
+
+    assert.ok(SUPPORTED_DEXS.includes('AerodromeV2'))
+    assert.equal(cfg.AerodromeV2?.adapter, addresses.adapters.aerodromeV2)
+    assert.equal(
+        cfg.AerodromeV2?.routerAddress,
+        addresses.routers.aerodromeV2
+    )
+})
+
+test('extractPathFromResponse preserves Aerodrome V2 route metadata', () => {
+    const usdc = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913'
+    const handl = '0x3bbcb624cb9a1f73163a886f460f47603e5e4425'
+    const factory = '0x420dd381b31aef6683db6b902084cb0ffece40da'
+    const response = {
+        priceRoute: {
+            bestRoute: [
+                {
+                    swaps: [
+                        {
+                            swapExchanges: [
+                                {
+                                    data: {
+                                        path: [usdc, handl],
+                                        factory,
+                                        pools: [{ stable: false }],
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+    } as unknown as VeloraRouteResponseAerodromeV2
+
+    const cached = extractPathFromResponse('AerodromeV2', response)
+
+    assert.ok(cached && cached.type === 'aerodromeV2')
+    assert.equal(cached.hops, 1)
+    assert.deepEqual(cached.routes, [
+        { from: usdc, to: handl, stable: false, factory },
+    ])
 })
 
 // ─── Uniswap V4 route source ─────────────────────────────────────────────────

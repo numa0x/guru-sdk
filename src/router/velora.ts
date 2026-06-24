@@ -3,11 +3,13 @@ import { Contract, solidityPacked, type Provider } from 'ethers'
 import type { GuruProtocolAddresses, GuruProtocolChainId } from '../addresses'
 import { TOLL_DIVISOR_20BPS } from '../constants'
 import {
+    AerodromeV2Adapter__factory,
     IPancakeQuoterV2__factory,
     UniswapV2Adapter__factory,
     UniswapV3Adapter__factory,
     UniswapV4Adapter__factory,
 } from '../typechain'
+import type { SwapAeroV2Struct } from '../typechain/out/AerodromeV2Adapter'
 import type { SwapV2Struct } from '../typechain/out/UniswapV2Adapter'
 import type { SwapV3Struct } from '../typechain/out/UniswapV3Adapter'
 import type { SwapV4Struct } from '../typechain/out/UniswapV4Adapter'
@@ -30,8 +32,19 @@ const V2_ROUTER_ABI = [
     'function getAmountsOut(uint256 amountIn, address[] memory path) external view returns (uint256[] memory amounts)',
 ] as const
 
+const AERO_V2_ROUTER_ABI = [
+    'function getAmountsOut(uint256 amountIn, (address from, address to, bool stable, address factory)[] routes) external view returns (uint256[] amounts)',
+] as const
+
 interface V2RouterLike {
     getAmountsOut: (amountIn: bigint, path: string[]) => Promise<bigint[]>
+}
+
+interface AeroV2RouterLike {
+    getAmountsOut: (
+        amountIn: bigint,
+        routes: SwapAeroV2Struct['routes']
+    ) => Promise<bigint[]>
 }
 
 function connectV2Router(address: string, provider: Provider): V2RouterLike {
@@ -40,6 +53,17 @@ function connectV2Router(address: string, provider: Provider): V2RouterLike {
         V2_ROUTER_ABI,
         provider
     ) as unknown as V2RouterLike
+}
+
+function connectAeroV2Router(
+    address: string,
+    provider: Provider
+): AeroV2RouterLike {
+    return new Contract(
+        address,
+        AERO_V2_ROUTER_ABI,
+        provider
+    ) as unknown as AeroV2RouterLike
 }
 
 // ─── Quoter wiring ───────────────────────────────────────────────────────────
@@ -66,6 +90,7 @@ interface V3DexEntry {
 
 interface VeloraDexConfig {
     UniswapV2?: V2DexEntry
+    AerodromeV2?: V2DexEntry
     PancakeSwapV2?: V2DexEntry
     UniswapV3?: V3DexEntry
     PancakeSwapV3?: V3DexEntry
@@ -83,6 +108,12 @@ export function buildVeloraDexConfig(
         cfg.UniswapV2 = {
             adapter: addresses.adapters.uniswapV2,
             routerAddress: addresses.routers.uniswapV2,
+        }
+    }
+    if (addresses.adapters.aerodromeV2 && addresses.routers.aerodromeV2) {
+        cfg.AerodromeV2 = {
+            adapter: addresses.adapters.aerodromeV2,
+            routerAddress: addresses.routers.aerodromeV2,
         }
     }
     if (addresses.adapters.pancakeV2 && addresses.routers.pancakeV2) {
@@ -177,6 +208,92 @@ export async function getRouteFromPath({
     const dexConfig = buildVeloraDexConfig(addresses)
 
     switch (dex) {
+        case 'AerodromeV2': {
+            if (cachedPath.type !== 'aerodromeV2') {
+                throw new Error('Expected Aerodrome V2 path')
+            }
+
+            const entry: V2DexEntry | undefined = dexConfig[dex]
+            if (!entry) {
+                throw new Error(
+                    `DEX ${dex} not supported on chainId ${chainId}`
+                )
+            }
+
+            const router = connectAeroV2Router(entry.routerAddress, provider)
+            const adapter = entry.adapter
+
+            const [grossAmountToReceive, blockNumber] = await Promise.all([
+                router
+                    .getAmountsOut(amountIn, cachedPath.routes)
+                    .then((amounts) => amounts.at(-1)!),
+                provider.getBlockNumber(),
+            ])
+
+            let amountQuoted = grossAmountToReceive
+            let amountToSend = amountIn
+
+            if (toll.amount === 0n) {
+                toll.amount = grossAmountToReceive / TOLL_DIVISOR_20BPS
+                amountQuoted -= toll.amount
+            } else {
+                amountToSend += toll.amount
+            }
+
+            const deadline =
+                Math.floor(Date.now() / 1000) + SWAP_DEADLINE_SECONDS
+            const buildCallDataForAmount = (amountToReceive: bigint) =>
+                AerodromeV2Adapter__factory.createInterface().encodeFunctionData(
+                    'executeSwap',
+                    [
+                        {
+                            amountToSend,
+                            amountToReceive,
+                            routes: cachedPath.routes,
+                            deadline,
+                        } satisfies SwapAeroV2Struct,
+                    ]
+                )
+
+            const context: SwapSimulationContext = {
+                chainId,
+                blockNumber,
+                controller,
+                vault,
+                adapter,
+                account,
+                path: cachedPath.path,
+                buildCallDataForAmount,
+                simulator,
+                prefixTxs,
+            }
+            const {
+                finalAmountToReceive,
+                callData,
+                effectiveSlippageBps,
+                finalTollAmount,
+            } = await finalizeRouteQuote({
+                context,
+                amountToSend,
+                amountQuoted,
+                initialTollAmount: toll.amount,
+                maxSlippageE3,
+            })
+
+            return {
+                adapter,
+                data: {
+                    amountToSend,
+                    amountToReceive: finalAmountToReceive,
+                    routes: cachedPath.routes,
+                    deadline,
+                },
+                callData,
+                toll: { ...toll, amount: finalTollAmount },
+                hops: cachedPath.hops,
+                effectiveSlippageBps,
+            }
+        }
         case 'PancakeSwapV2':
         case 'UniswapV2': {
             if (cachedPath.type !== 'v2') {

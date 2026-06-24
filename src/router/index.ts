@@ -145,7 +145,7 @@ export async function getRouteOut(
  * Returns the on-chain USD price of `token` as a 1e18-scaled bigint.
  *
  * Strategy mirrors the legacy `EvmPriceFetcher`:
- *   1. Quote 1 WETH → USDT via PoolHelper (best DEX wins) → wethUsd
+ *   1. Quote 1 WETH → USDC via PoolHelper (best DEX wins) → wethUsd
  *   2. If `token` is WETH, return wethUsd directly.
  *   3. Otherwise quote 1 token → WETH and convert: tokenUsd = oneTokenInWeth * wethUsd / WETH.unit
  *
@@ -166,6 +166,14 @@ export async function getPriceUsd1e18(
     const addresses: GuruProtocolAddresses = getGuruProtocolAddresses(
         ctx.chainId
     )
+
+    if (
+        compareAddresses(token, addresses.tokens.USDC) ||
+        compareAddresses(token, addresses.tokens.USDT)
+    ) {
+        return 10n ** 18n
+    }
+
     const poolHelper = new PoolHelper({
         chainId: ctx.chainId,
         provider: ctx.provider,
@@ -174,26 +182,46 @@ export async function getPriceUsd1e18(
 
     // Pricing scans every DEX with on-chain liquidity, including those without
     // a Guru Protocol adapter — we only need a price, not a swap route.
-    const { amount: wethUsdt } = await poolHelper.getBestQuote({
-        tokenAmount: parseEther('1'),
-        path: [addresses.tokens.WETH, addresses.tokens.USDT],
-        requireSwappable: false,
-    })
+    const stable = addresses.tokens.USDC
+    const { decimals: stableDecimals } = await new Token(stable, ctx.provider)
+        .metadata()
+        .catch(() => ({ decimals: 6 }))
+    const stableUnit = Token.unitFor(stableDecimals)
+    const stableAmountToUsd1e18 = (amount: bigint): bigint =>
+        (amount * 10n ** 18n) / stableUnit
 
-    const wethUsd = wethUsdt * 10n ** 12n // USDT (1e6) → USD 1e18
-
-    if (compareAddresses(token, addresses.tokens.WETH)) {
-        return wethUsd
+    let wethUsdCache: bigint | undefined
+    const getWethUsd = async (): Promise<bigint> => {
+        if (wethUsdCache != null) return wethUsdCache
+        const { amount: wethStable } = await poolHelper.getBestQuote({
+            tokenAmount: parseEther('1'),
+            path: [addresses.tokens.WETH, stable],
+            requireSwappable: false,
+        })
+        wethUsdCache = stableAmountToUsd1e18(wethStable)
+        return wethUsdCache
     }
 
-    const { decimals } = await new Token(token, ctx.provider)
-        .metadata()
-        .catch(() => ({ decimals: 0 }))
+    if (compareAddresses(token, addresses.tokens.WETH)) {
+        return getWethUsd()
+    }
+
+    const { decimals } = await new Token(token, ctx.provider).metadata()
     const oneToken = 10n ** BigInt(decimals)
+
+    const stableUsd = await _priceViaDirectStablePool(
+        token,
+        oneToken,
+        poolHelper,
+        stable,
+        stableDecimals
+    )
+    if (stableUsd !== null) return stableUsd
 
     const WETH_UNIT = 10n ** 18n
 
     try {
+        const wethUsd = await getWethUsd()
         const { amount: oneTokenInWeth } = await poolHelper.getBestQuote({
             tokenAmount: oneToken,
             path: [token, addresses.tokens.WETH],
@@ -203,10 +231,34 @@ export async function getPriceUsd1e18(
     } catch (error) {
         // V2/V3-less tokens (V4-only, e.g. hooked-pool launches) are invisible
         // to PoolHelper's factory scan — fall back to discovered V4 pools.
-        const v4Usd = await _priceViaV4Pools(token, oneToken, wethUsd, ctx)
+        const v4Usd = await _priceViaV4Pools(token, oneToken, getWethUsd, ctx)
         if (v4Usd !== null) return v4Usd
         throw error
     }
+}
+
+async function _priceViaDirectStablePool(
+    token: string,
+    oneToken: bigint,
+    poolHelper: PoolHelper,
+    stable: string,
+    stableDecimals: number
+): Promise<bigint | null> {
+    const factory = poolHelper.addresses.factories.aerodromeV2
+    if (!factory) return null
+
+    const route = await poolHelper
+        .getTokensForStableQuote({
+            path: [token, stable],
+            inputAmount: oneToken,
+            slippage: 0n,
+            exchangeFactory: factory,
+        })
+        .catch(() => null)
+    if (!route) return null
+
+    return (BigInt(route.data.amountToReceive) * 10n ** 18n) /
+        Token.unitFor(stableDecimals)
 }
 
 /**
@@ -218,7 +270,7 @@ export async function getPriceUsd1e18(
 async function _priceViaV4Pools(
     token: string,
     oneToken: bigint,
-    wethUsd: bigint,
+    getWethUsd: () => Promise<bigint>,
     ctx: {
         chainId: GuruProtocolChainId
         provider: Provider
@@ -263,6 +315,7 @@ async function _priceViaV4Pools(
 
     const inWeth = await quoteVia(addresses.tokens.WETH)
     if (inWeth !== null) {
+        const wethUsd = await getWethUsd()
         return (inWeth * wethUsd) / WETH_UNIT
     }
 

@@ -324,7 +324,7 @@ type VersionSpecificQuoteRequest = Omit<QuoteRequest, 'path' | 'slippage'> & {
 }
 
 export type StableQuoteRequest = {
-    path: [string, string, string]
+    path: [string, string] | [string, string, string]
     inputAmount: bigint
     slippage: bigint
     exchangeFactory: string
@@ -1106,18 +1106,25 @@ export default class PoolHelper {
                       this.provider
                   )
 
+        const [stable, intermediate, token] = path
+        if (!token) {
+            throw new Error(
+                `${PoolHelperError.EXCHANGE_INCOMPATIBLE}: direct V3 fallback not supported (factory=${exchangeFactory})`
+            )
+        }
+
         const { feeTier: stableFeeTier } =
             await this.getUniswapCompatibleTokenPool(path[0], {
                 exchangeFactory,
             })
         const { feeTier: tokenFeeTier } =
-            await this.getUniswapCompatibleTokenPool(path[2], {
+            await this.getUniswapCompatibleTokenPool(token, {
                 exchangeFactory,
             })
 
         const pathBytes: BytesLike = solidityPacked(
             ['address', 'uint24', 'address', 'uint24', 'address'],
-            [path[0], stableFeeTier, path[1], tokenFeeTier, path[2]]
+            [stable, stableFeeTier, intermediate, tokenFeeTier, token]
         )
 
         // Aerodrome's V3 quoter does not implement `quoteExactInput(bytes)`.
@@ -1138,8 +1145,8 @@ export default class PoolHelper {
             adjustedInputAmount,
             pathBytes,
             [
-                { tokenIn: path[0], tokenOut: path[1], fee: stableFeeTier },
-                { tokenIn: path[1], tokenOut: path[2], fee: tokenFeeTier },
+                { tokenIn: stable, tokenOut: intermediate, fee: stableFeeTier },
+                { tokenIn: intermediate, tokenOut: token, fee: tokenFeeTier },
             ]
         )
 
@@ -1149,13 +1156,13 @@ export default class PoolHelper {
             adapter,
             path: [
                 {
-                    tokenIn: path[0],
-                    tokenOut: path[1],
+                    tokenIn: stable,
+                    tokenOut: intermediate,
                     fee: String(stableFeeTier),
                 },
                 {
-                    tokenIn: path[1],
-                    tokenOut: path[2],
+                    tokenIn: intermediate,
+                    tokenOut: token,
                     fee: String(tokenFeeTier),
                 },
             ],
@@ -1292,7 +1299,10 @@ export default class PoolHelper {
                     adapter,
                     data: finalized.data,
                     callData: finalized.callData,
-                    toll: { currency: path[2], amount: finalized.tollAmount },
+                    toll: {
+                        currency: path[path.length - 1]!,
+                        amount: finalized.tollAmount,
+                    },
                     effectiveSlippageBps: finalized.effectiveSlippageBps,
                 }
             }
@@ -1339,7 +1349,10 @@ export default class PoolHelper {
                 adapter,
                 data: finalized.data,
                 callData: finalized.callData,
-                toll: { currency: path[2], amount: finalized.tollAmount },
+                toll: {
+                    currency: path[path.length - 1]!,
+                    amount: finalized.tollAmount,
+                },
                 effectiveSlippageBps: finalized.effectiveSlippageBps,
             }
         }
@@ -1356,18 +1369,25 @@ export default class PoolHelper {
             this.provider
         )
 
+        const [token, intermediate, stable] = path
+        if (!stable) {
+            throw new Error(
+                `${PoolHelperError.EXCHANGE_INCOMPATIBLE}: direct V3 fallback not supported (factory=${exchangeFactory})`
+            )
+        }
+
         const { feeTier: tokenFeeTier } =
             await this.getUniswapCompatibleTokenPool(path[0], {
                 exchangeFactory,
             })
         const { feeTier: stableFeeTier } =
-            await this.getUniswapCompatibleTokenPool(path[2], {
+            await this.getUniswapCompatibleTokenPool(stable, {
                 exchangeFactory,
             })
 
         const pathBytes = solidityPacked(
             ['address', 'uint24', 'address', 'uint24', 'address'],
-            [path[0], tokenFeeTier, path[1], stableFeeTier, path[2]]
+            [token, tokenFeeTier, intermediate, stableFeeTier, stable]
         )
 
         const amountOut = await this._quoteV3MultiHop(
@@ -1375,8 +1395,8 @@ export default class PoolHelper {
             inputAmount,
             pathBytes,
             [
-                { tokenIn: path[0], tokenOut: path[1], fee: tokenFeeTier },
-                { tokenIn: path[1], tokenOut: path[2], fee: stableFeeTier },
+                { tokenIn: token, tokenOut: intermediate, fee: tokenFeeTier },
+                { tokenIn: intermediate, tokenOut: stable, fee: stableFeeTier },
             ]
         )
 
@@ -1388,13 +1408,13 @@ export default class PoolHelper {
             adapter,
             path: [
                 {
-                    tokenIn: path[0],
-                    tokenOut: path[1],
+                    tokenIn: token,
+                    tokenOut: intermediate,
                     fee: String(tokenFeeTier),
                 },
                 {
-                    tokenIn: path[1],
-                    tokenOut: path[2],
+                    tokenIn: intermediate,
+                    tokenOut: stable,
                     fee: String(stableFeeTier),
                 },
             ],
@@ -1425,7 +1445,7 @@ export default class PoolHelper {
             adapter,
             data: finalized.data,
             callData: finalized.callData,
-            toll: { currency: path[2], amount: finalized.tollAmount },
+            toll: { currency: stable, amount: finalized.tollAmount },
             effectiveSlippageBps: finalized.effectiveSlippageBps,
         }
     }
