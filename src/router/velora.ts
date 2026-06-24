@@ -3,6 +3,7 @@ import { Contract, solidityPacked, type Provider } from 'ethers'
 import type { GuruProtocolAddresses, GuruProtocolChainId } from '../addresses'
 import { TOLL_DIVISOR_20BPS } from '../constants'
 import {
+    AerodromeV3Adapter__factory,
     AerodromeV2Adapter__factory,
     IPancakeQuoterV2__factory,
     UniswapV2Adapter__factory,
@@ -36,6 +37,10 @@ const AERO_V2_ROUTER_ABI = [
     'function getAmountsOut(uint256 amountIn, (address from, address to, bool stable, address factory)[] routes) external view returns (uint256[] amounts)',
 ] as const
 
+const AERO_V3_QUOTER_ABI = [
+    'function quoteExactInputSingle((address tokenIn, address tokenOut, uint256 amountIn, int24 tickSpacing, uint160 sqrtPriceLimitX96) params) returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)',
+] as const
+
 interface V2RouterLike {
     getAmountsOut: (amountIn: bigint, path: string[]) => Promise<bigint[]>
 }
@@ -45,6 +50,23 @@ interface AeroV2RouterLike {
         amountIn: bigint,
         routes: SwapAeroV2Struct['routes']
     ) => Promise<bigint[]>
+}
+
+interface AeroV3QuoterLike {
+    quoteExactInputSingle: {
+        staticCall: (params: {
+            tokenIn: string
+            tokenOut: string
+            amountIn: bigint
+            tickSpacing: bigint
+            sqrtPriceLimitX96: bigint
+        }) => Promise<{
+            amountOut: bigint
+            sqrtPriceX96After: bigint
+            initializedTicksCrossed: bigint
+            gasEstimate: bigint
+        }>
+    }
 }
 
 function connectV2Router(address: string, provider: Provider): V2RouterLike {
@@ -64,6 +86,17 @@ function connectAeroV2Router(
         AERO_V2_ROUTER_ABI,
         provider
     ) as unknown as AeroV2RouterLike
+}
+
+function connectAeroV3Quoter(
+    address: string,
+    provider: Provider
+): AeroV3QuoterLike {
+    return new Contract(
+        address,
+        AERO_V3_QUOTER_ABI,
+        provider
+    ) as unknown as AeroV3QuoterLike
 }
 
 // ─── Quoter wiring ───────────────────────────────────────────────────────────
@@ -91,6 +124,7 @@ interface V3DexEntry {
 interface VeloraDexConfig {
     UniswapV2?: V2DexEntry
     AerodromeV2?: V2DexEntry
+    AerodromeV3?: V3DexEntry
     PancakeSwapV2?: V2DexEntry
     UniswapV3?: V3DexEntry
     PancakeSwapV3?: V3DexEntry
@@ -114,6 +148,12 @@ export function buildVeloraDexConfig(
         cfg.AerodromeV2 = {
             adapter: addresses.adapters.aerodromeV2,
             routerAddress: addresses.routers.aerodromeV2,
+        }
+    }
+    if (addresses.adapters.aerodromeV3 && addresses.quoters.aerodromeV3) {
+        cfg.AerodromeV3 = {
+            adapter: addresses.adapters.aerodromeV3,
+            quoterAddress: addresses.quoters.aerodromeV3,
         }
     }
     if (addresses.adapters.pancakeV2 && addresses.routers.pancakeV2) {
@@ -384,6 +424,7 @@ export async function getRouteFromPath({
                 effectiveSlippageBps,
             }
         }
+        case 'AerodromeV3':
         case 'PancakeSwapV3':
         case 'UniswapV3': {
             if (cachedPath.type !== 'v3') {
@@ -398,14 +439,46 @@ export async function getRouteFromPath({
             }
 
             const adapter = entry.adapter
-            const quoter = connectV3Quoter(entry.quoterAddress, provider)
-            const encodedPath = encodeV3Path(cachedPath.path)
+            let encodedPath: string
+            let grossAmountToReceive: bigint
+            let blockNumber: number
 
-            const [{ amountOut: grossAmountToReceive }, blockNumber] =
-                await Promise.all([
+            if (dex === 'AerodromeV3') {
+                if (cachedPath.path.length !== 1) {
+                    throw new Error('Aerodrome V3 multi-hop not supported')
+                }
+                const [hop] = cachedPath.path
+                const tickSpacing = BigInt(hop.fee)
+                encodedPath = solidityPacked(
+                    ['address', 'uint24', 'address'],
+                    [hop.tokenIn, Number(tickSpacing), hop.tokenOut]
+                )
+                const quoter = connectAeroV3Quoter(
+                    entry.quoterAddress,
+                    provider
+                )
+                const [quote, currentBlockNumber] = await Promise.all([
+                    quoter.quoteExactInputSingle.staticCall({
+                        tokenIn: hop.tokenIn,
+                        tokenOut: hop.tokenOut,
+                        amountIn,
+                        tickSpacing,
+                        sqrtPriceLimitX96: 0n,
+                    }),
+                    provider.getBlockNumber(),
+                ])
+                grossAmountToReceive = quote.amountOut
+                blockNumber = currentBlockNumber
+            } else {
+                const quoter = connectV3Quoter(entry.quoterAddress, provider)
+                encodedPath = encodeV3Path(cachedPath.path)
+                const [quote, currentBlockNumber] = await Promise.all([
                     quoter.quoteExactInput.staticCall(encodedPath, amountIn),
                     provider.getBlockNumber(),
                 ])
+                grossAmountToReceive = quote.amountOut
+                blockNumber = currentBlockNumber
+            }
 
             let amountQuoted = grossAmountToReceive
             let amountToSend = amountIn
@@ -419,18 +492,19 @@ export async function getRouteFromPath({
 
             const deadline =
                 Math.floor(Date.now() / 1000) + SWAP_DEADLINE_SECONDS
+            const swapInterface =
+                dex === 'AerodromeV3'
+                    ? AerodromeV3Adapter__factory.createInterface()
+                    : UniswapV3Adapter__factory.createInterface()
             const buildCallDataForAmount = (amountToReceive: bigint) =>
-                UniswapV3Adapter__factory.createInterface().encodeFunctionData(
-                    'executeSwap',
-                    [
-                        {
-                            amountToSend,
-                            amountToReceive,
-                            path: encodedPath,
-                            deadline,
-                        } satisfies SwapV3Struct,
-                    ]
-                )
+                swapInterface.encodeFunctionData('executeSwap', [
+                    {
+                        amountToSend,
+                        amountToReceive,
+                        path: encodedPath,
+                        deadline,
+                    } satisfies SwapV3Struct,
+                ])
 
             const context: SwapSimulationContext = {
                 chainId,

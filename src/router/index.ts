@@ -1,4 +1,4 @@
-import { parseEther, type Provider } from 'ethers'
+import { Contract, parseEther, ZeroAddress, type Provider } from 'ethers'
 
 import {
     getGuruProtocolAddresses,
@@ -23,6 +23,108 @@ import PoolHelper from './poolHelper'
 import type { SwapSimulator } from './simulation'
 import type { Route, RouteSearchParams } from './types'
 import { discoverV4Paths } from './v4PoolDiscovery'
+
+const AERO_V3_FACTORY_ABI = [
+    'function getPool(address tokenA, address tokenB, int24 tickSpacing) view returns (address pool)',
+] as const
+
+const V2_FACTORY_ABI = [
+    'function getPair(address tokenA, address tokenB) view returns (address pair)',
+] as const
+
+const V2_ROUTER_ABI = [
+    'function getAmountsOut(uint256 amountIn, address[] memory path) view returns (uint256[] memory amounts)',
+] as const
+
+const AERO_V2_FACTORY_ABI = [
+    'function getPool(address tokenA, address tokenB, bool stable) view returns (address)',
+] as const
+
+const AERO_V2_ROUTER_ABI = [
+    'function getAmountsOut(uint256 amountIn, (address from, address to, bool stable, address factory)[] routes) view returns (uint256[] amounts)',
+] as const
+
+const V3_FACTORY_ABI = [
+    'function getPool(address tokenA, address tokenB, uint24 fee) view returns (address pool)',
+] as const
+
+const V3_QUOTER_ABI = [
+    'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96) params) returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)',
+] as const
+
+const AERO_V3_QUOTER_ABI = [
+    'function quoteExactInputSingle((address tokenIn, address tokenOut, uint256 amountIn, int24 tickSpacing, uint160 sqrtPriceLimitX96) params) returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)',
+] as const
+
+const UNISWAP_V3_FEES = [100, 500, 3000, 10000] as const
+const PANCAKE_V3_FEES = [100, 500, 2500, 10000] as const
+const AERODROME_V3_TICK_SPACINGS = [1, 50, 100, 200] as const
+
+interface V2FactoryLike {
+    getPair: (tokenA: string, tokenB: string) => Promise<string>
+}
+
+interface V2RouterLike {
+    getAmountsOut: (amountIn: bigint, path: string[]) => Promise<bigint[]>
+}
+
+interface AeroV2FactoryLike {
+    getPool: (
+        tokenA: string,
+        tokenB: string,
+        stable: boolean
+    ) => Promise<string>
+}
+
+type AeroV2Route = {
+    from: string
+    to: string
+    stable: boolean
+    factory: string
+}
+
+interface AeroV2RouterLike {
+    getAmountsOut: (
+        amountIn: bigint,
+        routes: AeroV2Route[]
+    ) => Promise<bigint[]>
+}
+
+interface V3FactoryLike {
+    getPool: (tokenA: string, tokenB: string, fee: number) => Promise<string>
+}
+
+interface V3QuoterLike {
+    quoteExactInputSingle: {
+        staticCall: (params: {
+            tokenIn: string
+            tokenOut: string
+            amountIn: bigint
+            fee: bigint
+            sqrtPriceLimitX96: bigint
+        }) => Promise<{ amountOut: bigint }>
+    }
+}
+
+interface AeroV3FactoryLike {
+    getPool: (
+        tokenA: string,
+        tokenB: string,
+        tickSpacing: number
+    ) => Promise<string>
+}
+
+interface AeroV3QuoterLike {
+    quoteExactInputSingle: {
+        staticCall: (params: {
+            tokenIn: string
+            tokenOut: string
+            amountIn: bigint
+            tickSpacing: bigint
+            sqrtPriceLimitX96: bigint
+        }) => Promise<{ amountOut: bigint }>
+    }
+}
 
 /**
  * Orchestration context for `getRouteIn`/`getRouteOut`. Combines the Velora
@@ -214,9 +316,9 @@ export async function getPriceUsd1e18(
         oneToken,
         poolHelper,
         stable,
-        stableDecimals
+        stableDecimals,
+        ctx.provider
     )
-    if (stableUsd !== null) return stableUsd
 
     const WETH_UNIT = 10n ** 18n
 
@@ -227,11 +329,18 @@ export async function getPriceUsd1e18(
             path: [token, addresses.tokens.WETH],
             requireSwappable: false,
         })
-        return (oneTokenInWeth * wethUsd) / WETH_UNIT
+        const wethRouteUsd = (oneTokenInWeth * wethUsd) / WETH_UNIT
+        return stableUsd !== null && stableUsd > wethRouteUsd
+            ? stableUsd
+            : wethRouteUsd
     } catch (error) {
         // V2/V3-less tokens (V4-only, e.g. hooked-pool launches) are invisible
         // to PoolHelper's factory scan — fall back to discovered V4 pools.
         const v4Usd = await _priceViaV4Pools(token, oneToken, getWethUsd, ctx)
+        if (stableUsd !== null && v4Usd !== null) {
+            return stableUsd > v4Usd ? stableUsd : v4Usd
+        }
+        if (stableUsd !== null) return stableUsd
         if (v4Usd !== null) return v4Usd
         throw error
     }
@@ -242,25 +351,255 @@ async function _priceViaDirectStablePool(
     oneToken: bigint,
     poolHelper: PoolHelper,
     stable: string,
-    stableDecimals: number
+    stableDecimals: number,
+    provider: Provider
 ): Promise<bigint | null> {
-    const factory = poolHelper.addresses.factories.aerodromeV2
-    if (!factory) return null
+    const stableUnit = Token.unitFor(stableDecimals)
+    const toUsd1e18 = (amount: bigint): bigint =>
+        (amount * 10n ** 18n) / stableUnit
 
-    const route = await poolHelper
-        .getTokensForStableQuote({
-            path: [token, stable],
-            inputAmount: oneToken,
-            slippage: 0n,
-            exchangeFactory: factory,
+    const quotes: bigint[] = []
+
+    const v2Amount = await _quoteDirectV2StablePools(
+        token,
+        stable,
+        oneToken,
+        poolHelper,
+        provider
+    )
+    if (v2Amount > 0n) quotes.push(v2Amount)
+
+    const v3Amount = await _quoteDirectV3StablePools(
+        token,
+        stable,
+        oneToken,
+        poolHelper,
+        provider
+    )
+    if (v3Amount > 0n) quotes.push(v3Amount)
+
+    const aeroV3Amount = await _quoteDirectAerodromeV3StablePool(
+        token,
+        stable,
+        oneToken,
+        poolHelper,
+        provider
+    )
+    if (aeroV3Amount > 0n) quotes.push(aeroV3Amount)
+
+    if (quotes.length === 0) return null
+
+    const best = quotes.reduce((currentBest, amount) =>
+        amount > currentBest ? amount : currentBest
+    )
+    return toUsd1e18(best)
+}
+
+async function _quoteDirectV2StablePools(
+    token: string,
+    stable: string,
+    oneToken: bigint,
+    poolHelper: PoolHelper,
+    provider: Provider
+): Promise<bigint> {
+    let best = 0n
+
+    const quoteStandardV2 = async (
+        factoryAddress: string | undefined,
+        routerAddress: string | undefined
+    ) => {
+        if (!factoryAddress || !routerAddress) return
+        const factory = new Contract(
+            factoryAddress,
+            V2_FACTORY_ABI,
+            provider
+        ) as unknown as V2FactoryLike
+        const pairAddress = await factory
+            .getPair(token, stable)
+            .catch(() => ZeroAddress)
+        if (pairAddress === ZeroAddress) return
+
+        const router = new Contract(
+            routerAddress,
+            V2_ROUTER_ABI,
+            provider
+        ) as unknown as V2RouterLike
+        const amounts = await router
+            .getAmountsOut(oneToken, [token, stable])
+            .catch(() => null)
+        const amountOut = amounts?.at(-1) ?? 0n
+        if (amountOut > best) best = amountOut
+    }
+
+    const quoteAerodromeV2 = async (
+        factoryAddress: string | undefined,
+        routerAddress: string | undefined
+    ) => {
+        if (!factoryAddress || !routerAddress) return
+        const factory = new Contract(
+            factoryAddress,
+            AERO_V2_FACTORY_ABI,
+            provider
+        ) as unknown as AeroV2FactoryLike
+        const router = new Contract(
+            routerAddress,
+            AERO_V2_ROUTER_ABI,
+            provider
+        ) as unknown as AeroV2RouterLike
+
+        await Promise.all(
+            [false, true].map(async (stablePool) => {
+                const poolAddress = await factory
+                    .getPool(token, stable, stablePool)
+                    .catch(() => ZeroAddress)
+                if (poolAddress === ZeroAddress) return
+                const amounts = await router
+                    .getAmountsOut(oneToken, [
+                        {
+                            from: token,
+                            to: stable,
+                            stable: stablePool,
+                            factory: factoryAddress,
+                        },
+                    ])
+                    .catch(() => null)
+                const amountOut = amounts?.at(-1) ?? 0n
+                if (amountOut > best) best = amountOut
+            })
+        )
+    }
+
+    await Promise.all([
+        quoteStandardV2(
+            poolHelper.addresses.factories.uniswapV2,
+            poolHelper.addresses.routers.uniswapV2
+        ),
+        quoteStandardV2(
+            poolHelper.addresses.factories.pancakeV2,
+            poolHelper.addresses.routers.pancakeV2
+        ),
+        quoteAerodromeV2(
+            poolHelper.addresses.factories.aerodromeV2,
+            poolHelper.addresses.routers.aerodromeV2
+        ),
+    ])
+
+    return best
+}
+
+async function _quoteDirectV3StablePools(
+    token: string,
+    stable: string,
+    oneToken: bigint,
+    poolHelper: PoolHelper,
+    provider: Provider
+): Promise<bigint> {
+    let best = 0n
+
+    const quoteFactory = async (
+        factoryAddress: string | undefined,
+        quoterAddress: string | undefined,
+        fees: readonly number[]
+    ) => {
+        if (!factoryAddress || !quoterAddress) return
+        const factory = new Contract(
+            factoryAddress,
+            V3_FACTORY_ABI,
+            provider
+        ) as unknown as V3FactoryLike
+        const quoter = new Contract(
+            quoterAddress,
+            V3_QUOTER_ABI,
+            provider
+        ) as unknown as V3QuoterLike
+
+        await Promise.all(
+            fees.map(async (fee) => {
+                const poolAddress = await factory
+                    .getPool(token, stable, fee)
+                    .catch(() => ZeroAddress)
+                if (poolAddress === ZeroAddress) return
+
+                const quote = await quoter.quoteExactInputSingle.staticCall({
+                    tokenIn: token,
+                    tokenOut: stable,
+                    amountIn: oneToken,
+                    fee: BigInt(fee),
+                    sqrtPriceLimitX96: 0n,
+                }).catch(() => null)
+                const amountOut = quote?.amountOut ?? 0n
+                if (amountOut > best) best = amountOut
+            })
+        )
+    }
+
+    await Promise.all([
+        quoteFactory(
+            poolHelper.addresses.factories.uniswapV3,
+            poolHelper.addresses.quoters.uniswapV3,
+            UNISWAP_V3_FEES
+        ),
+        quoteFactory(
+            poolHelper.addresses.factories.pancakeV3,
+            poolHelper.addresses.quoters.pancakeV3,
+            PANCAKE_V3_FEES
+        ),
+    ])
+
+    return best
+}
+
+async function _quoteDirectAerodromeV3StablePool(
+    token: string,
+    stable: string,
+    oneToken: bigint,
+    poolHelper: PoolHelper,
+    provider: Provider
+): Promise<bigint> {
+    const quoterAddress = poolHelper.addresses.quoters.aerodromeV3
+    if (!quoterAddress) return 0n
+
+    const factories = [
+        poolHelper.addresses.factories.aerodromeV3,
+        poolHelper.addresses.factories.aerodromeV3Bis,
+    ].filter((factory): factory is string => Boolean(factory))
+    if (factories.length === 0) return 0n
+
+    const quoter = new Contract(
+        quoterAddress,
+        AERO_V3_QUOTER_ABI,
+        provider
+    ) as unknown as AeroV3QuoterLike
+
+    let best = 0n
+    await Promise.all(
+        factories.flatMap((factoryAddress) => {
+            const factory = new Contract(
+                factoryAddress,
+                AERO_V3_FACTORY_ABI,
+                provider
+            ) as unknown as AeroV3FactoryLike
+
+            return AERODROME_V3_TICK_SPACINGS.map(async (tickSpacing) => {
+                const poolAddress = await factory
+                    .getPool(token, stable, tickSpacing)
+                    .catch(() => ZeroAddress)
+                if (poolAddress === ZeroAddress) return
+
+                const quote = await quoter.quoteExactInputSingle.staticCall({
+                    tokenIn: token,
+                    tokenOut: stable,
+                    amountIn: oneToken,
+                    tickSpacing: BigInt(tickSpacing),
+                    sqrtPriceLimitX96: 0n,
+                }).catch(() => null)
+                const amountOut = quote?.amountOut ?? 0n
+                if (amountOut > best) best = amountOut
+            })
         })
-        .catch(() => null)
-    if (!route) return null
+    )
 
-    const amountToReceive = BigInt(route.data.amountToReceive)
-    if (amountToReceive === 0n) return null
-
-    return (amountToReceive * 10n ** 18n) / Token.unitFor(stableDecimals)
+    return best
 }
 
 /**

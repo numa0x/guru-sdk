@@ -40,7 +40,13 @@ export type SwapV4HookStruct = {
     deadline: number
 }
 
-export type V3PathHop = { tokenIn: string; tokenOut: string; fee: string }
+export type V3PathHop = {
+    tokenIn: string
+    tokenOut: string
+    fee: string
+    currentFee?: string | number
+    tickSpacing?: string | number
+}
 export type V3Path = V3PathHop[]
 
 export type CachedPath =

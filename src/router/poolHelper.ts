@@ -83,6 +83,18 @@ interface V3FactoryLike {
     getPool: (tokenA: string, tokenB: string, fee: number) => Promise<string>
 }
 
+const AERO_V3_FACTORY_ABI = [
+    'function getPool(address tokenA, address tokenB, int24 tickSpacing) view returns (address pool)',
+] as const
+
+interface AeroV3FactoryLike {
+    getPool: (
+        tokenA: string,
+        tokenB: string,
+        tickSpacing: number
+    ) => Promise<string>
+}
+
 const V3_POOL_ABI = ['function fee() view returns (uint24)'] as const
 
 interface V3PoolLike {
@@ -614,11 +626,18 @@ export default class PoolHelper {
                         // No V2 pool on this factory — continue probing others.
                     }
                 } else {
-                    const factory = connect<V3FactoryLike>(
-                        factoryAddress,
-                        V3_FACTORY_ABI,
-                        this.provider
-                    )
+                    const factory =
+                        dex.kind === 'aerodrome'
+                            ? connect<AeroV3FactoryLike>(
+                                  factoryAddress,
+                                  AERO_V3_FACTORY_ABI,
+                                  this.provider
+                              )
+                            : connect<V3FactoryLike>(
+                                  factoryAddress,
+                                  V3_FACTORY_ABI,
+                                  this.provider
+                              )
                     await Promise.all(
                         dex.feeTiers.map(async (feeTier) => {
                             try {

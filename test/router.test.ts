@@ -9,7 +9,10 @@ import { extractPathFromResponse } from '../src/router/pathCache'
 import type PoolHelper from '../src/router/poolHelper'
 import { quoteWethTrade } from '../src/router/quoteWethTrade'
 import { buildVeloraDexConfig } from '../src/router/velora'
-import type { VeloraRouteResponseAerodromeV2 } from '../src/router/types'
+import type {
+    VeloraRouteResponseAerodromeV2,
+    VeloraRouteResponseV3,
+} from '../src/router/types'
 
 const fakeRoute = (label: string): Route => ({
     adapter: '0xadapter',
@@ -198,15 +201,21 @@ test('quoteWethTrade finalizes fallback min-out through max slippage when sims f
     assert.equal(route.toll.amount, 2n)
 })
 
-test('Base Velora config enables Aerodrome V2 routes', () => {
+test('Base Velora config enables Aerodrome routes', () => {
     const addresses = getGuruProtocolAddresses(8453)
     const cfg = buildVeloraDexConfig(addresses)
 
     assert.ok(SUPPORTED_DEXS.includes('AerodromeV2'))
+    assert.ok(SUPPORTED_DEXS.includes('AerodromeV3'))
     assert.equal(cfg.AerodromeV2?.adapter, addresses.adapters.aerodromeV2)
     assert.equal(
         cfg.AerodromeV2?.routerAddress,
         addresses.routers.aerodromeV2
+    )
+    assert.equal(cfg.AerodromeV3?.adapter, addresses.adapters.aerodromeV3)
+    assert.equal(
+        cfg.AerodromeV3?.quoterAddress,
+        addresses.quoters.aerodromeV3
     )
 })
 
@@ -242,6 +251,52 @@ test('extractPathFromResponse preserves Aerodrome V2 route metadata', () => {
     assert.equal(cached.hops, 1)
     assert.deepEqual(cached.routes, [
         { from: usdc, to: handl, stable: false, factory },
+    ])
+})
+
+test('extractPathFromResponse uses Aerodrome V3 tick spacing for Slipstream paths', () => {
+    const usdc = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913'
+    const rize = '0x9818b6c09f5ecc843060927e8587c427c7c93583'
+    const response = {
+        priceRoute: {
+            bestRoute: [
+                {
+                    swaps: [
+                        {
+                            swapExchanges: [
+                                {
+                                    data: {
+                                        path: [
+                                            {
+                                                tokenIn: usdc,
+                                                tokenOut: rize,
+                                                fee: '3000',
+                                                currentFee: '3000',
+                                                tickSpacing: '200',
+                                            },
+                                        ],
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+    } as unknown as VeloraRouteResponseV3
+
+    const cached = extractPathFromResponse('AerodromeV3', response)
+
+    assert.ok(cached && cached.type === 'v3')
+    assert.equal(cached.hops, 1)
+    assert.deepEqual(cached.path, [
+        {
+            tokenIn: usdc,
+            tokenOut: rize,
+            fee: '200',
+            currentFee: '3000',
+            tickSpacing: '200',
+        },
     ])
 })
 

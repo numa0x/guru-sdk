@@ -4,6 +4,7 @@ export const SUPPORTED_DEXS = [
     'UniswapV2',
     'UniswapV3',
     'UniswapV4',
+    'AerodromeV3',
     'AerodromeV2',
     'PancakeSwapV2',
     'PancakeSwapV3',

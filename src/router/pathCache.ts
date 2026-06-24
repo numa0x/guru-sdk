@@ -78,11 +78,23 @@ export function extractPathFromResponse(
         if (
             !Array.isArray(swapPath) ||
             typeof swapPath[0]?.tokenIn !== 'string' ||
-            typeof swapPath[0]?.fee !== 'string'
+            swapPath[0]?.fee == null
         ) {
             throw new Error('Unexpected V3 path structure')
         }
-        combinedPath.push(...swapPath)
+        combinedPath.push(
+            ...swapPath.map((hop) => ({
+                tokenIn: hop.tokenIn,
+                tokenOut: hop.tokenOut,
+                fee: String(
+                    dex === 'AerodromeV3'
+                        ? (hop.tickSpacing ?? hop.fee)
+                        : hop.fee
+                ),
+                currentFee: hop.currentFee,
+                tickSpacing: hop.tickSpacing,
+            }))
+        )
     }
 
     return { type: 'v3', path: combinedPath, hops: combinedPath.length }
