@@ -3,7 +3,11 @@ import { ContractTransactionReceipt, Interface } from 'ethers'
 import { TypedContractEvent, TypedLogDescription } from '../typechain/common'
 
 type TypechainOutputObject<T> =
-    T extends TypedContractEvent<infer _U, infer _W, infer V> ? V : never
+    T extends TypedContractEvent<infer _U, infer _W, infer V>
+        ? keyof V extends never
+            ? any
+            : V
+        : any
 
 export default class ReceiptParser {
     /**

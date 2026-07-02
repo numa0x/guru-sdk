@@ -1,6 +1,6 @@
 {
     "name": "@guru-fund/sdk",
-    "version": "0.2.5",
+    "version": "0.2.6",
     "description": "Guru Protocol SDK — quote + transaction builders for on-chain managed funds.",
     "license": "MIT",
     "type": "module",
@@ -53,7 +53,7 @@
         "clean": "rm -rf dist .turbo tsconfig.build.tsbuildinfo",
         "typecheck": "tsc --noEmit",
         "test": "node --import tsx --test test/*.test.ts",
-        "prepack": "pnpm run build"
+        "prepack": "npm run build"
     },
     "dependencies": {
         "ethers": "=6.15.0",
