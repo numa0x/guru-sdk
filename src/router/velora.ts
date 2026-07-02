@@ -216,6 +216,7 @@ export interface GetRouteFromPathParams {
     dex: SupportedDex
     cachedPath: CachedPath
     amountIn: bigint
+    tollIn: boolean
     toll: { currency: string; amount: bigint }
     vault: string
     controller: string
@@ -234,6 +235,7 @@ export async function getRouteFromPath({
     dex,
     cachedPath,
     amountIn,
+    tollIn,
     toll,
     vault,
     controller,
@@ -273,7 +275,7 @@ export async function getRouteFromPath({
             let amountQuoted = grossAmountToReceive
             let amountToSend = amountIn
 
-            if (toll.amount === 0n) {
+            if (!tollIn && toll.amount === 0n) {
                 toll.amount = grossAmountToReceive / TOLL_DIVISOR_20BPS
                 amountQuoted -= toll.amount
             } else {
@@ -317,6 +319,7 @@ export async function getRouteFromPath({
                 amountToSend,
                 amountQuoted,
                 initialTollAmount: toll.amount,
+                outputTollE3: tollIn ? 0n : undefined,
                 maxSlippageE3,
             })
 
@@ -363,7 +366,7 @@ export async function getRouteFromPath({
             let amountQuoted = grossAmountToReceive
             let amountToSend = amountIn
 
-            if (toll.amount === 0n) {
+            if (!tollIn && toll.amount === 0n) {
                 toll.amount = grossAmountToReceive / TOLL_DIVISOR_20BPS
                 amountQuoted -= toll.amount
             } else {
@@ -407,6 +410,7 @@ export async function getRouteFromPath({
                 amountToSend,
                 amountQuoted,
                 initialTollAmount: toll.amount,
+                outputTollE3: tollIn ? 0n : undefined,
                 maxSlippageE3,
             })
 
@@ -483,7 +487,7 @@ export async function getRouteFromPath({
             let amountQuoted = grossAmountToReceive
             let amountToSend = amountIn
 
-            if (toll.amount === 0n) {
+            if (!tollIn && toll.amount === 0n) {
                 toll.amount = grossAmountToReceive / TOLL_DIVISOR_20BPS
                 amountQuoted -= toll.amount
             } else {
@@ -528,6 +532,7 @@ export async function getRouteFromPath({
                 amountToSend,
                 amountQuoted,
                 initialTollAmount: toll.amount,
+                outputTollE3: tollIn ? 0n : undefined,
                 maxSlippageE3,
             })
 
@@ -574,7 +579,7 @@ export async function getRouteFromPath({
             let amountQuoted = grossAmountToReceive
             let amountToSend = amountIn
 
-            if (toll.amount === 0n) {
+            if (!tollIn && toll.amount === 0n) {
                 toll.amount = grossAmountToReceive / TOLL_DIVISOR_20BPS
                 amountQuoted -= toll.amount
             } else {
@@ -619,6 +624,7 @@ export async function getRouteFromPath({
                 amountToSend,
                 amountQuoted,
                 initialTollAmount: toll.amount,
+                outputTollE3: tollIn ? 0n : undefined,
                 maxSlippageE3,
             })
 

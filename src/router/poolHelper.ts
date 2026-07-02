@@ -1037,6 +1037,7 @@ export default class PoolHelper {
                     amountToSend: inputAmount,
                     amountQuoted: lastAmount(amounts, exchangeFactory),
                     initialTollAmount: swapFee,
+                    outputTollE3: 0n,
                     slippage,
                     buildSwap: (amountToReceive) => {
                         const data: SwapAeroV2Struct = {
@@ -1082,6 +1083,7 @@ export default class PoolHelper {
                 amountToSend: inputAmount,
                 amountQuoted: lastAmount(amounts, exchangeFactory),
                 initialTollAmount: swapFee,
+                outputTollE3: 0n,
                 slippage,
                 buildSwap: (amountToReceive) => {
                     const data: SwapV2Struct = {
@@ -1188,6 +1190,7 @@ export default class PoolHelper {
             amountToSend: inputAmount,
             amountQuoted: amountOut,
             initialTollAmount: swapFee,
+            outputTollE3: 0n,
             slippage,
             buildSwap: (amountToReceive) => {
                 const data: SwapV3Struct = {

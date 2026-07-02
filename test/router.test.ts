@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import { tryWithVeloraFallback } from '../src/router'
 import { getGuruProtocolAddresses } from '../src/addresses'
+import { applyV4Toll } from '../src/router/getUniswapV4Route'
 import type { Route } from '../src/router'
 import { SUPPORTED_DEXS } from '../src/router/constants'
 import { extractPathFromResponse } from '../src/router/pathCache'
@@ -153,6 +154,42 @@ test('quoteWethTrade uses the pre-slipped best quote as amountToReceive', async 
     })
 
     assert.equal(route.data.amountToReceive, 950n)
+})
+
+test('applyV4Toll keeps zero-rounded input toll at zero', () => {
+    const route = applyV4Toll({
+        tollIn: true,
+        baseToll: {
+            currency: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+            amount: 0n,
+        },
+        quotedAmountToReceive: 1_000n,
+        quoteSource: 'quoter',
+        swapAmountIn: 2n,
+    })
+
+    assert.equal(route.toll.amount, 0n)
+    assert.equal(route.amountQuoted, 1_000n)
+    assert.equal(route.amountToSend, 2n)
+    assert.equal(route.initialTollAmount, 0n)
+})
+
+test('applyV4Toll deducts output toll when toll is not on input', () => {
+    const route = applyV4Toll({
+        tollIn: false,
+        baseToll: {
+            currency: '0x4200000000000000000000000000000000000006',
+            amount: 0n,
+        },
+        quotedAmountToReceive: 1_000n,
+        quoteSource: 'quoter',
+        swapAmountIn: 2n,
+    })
+
+    assert.equal(route.toll.amount, 2n)
+    assert.equal(route.amountQuoted, 998n)
+    assert.equal(route.amountToSend, 2n)
+    assert.equal(route.initialTollAmount, 0n)
 })
 
 test('quoteWethTrade finalizes fallback min-out through max slippage when sims fail', async () => {

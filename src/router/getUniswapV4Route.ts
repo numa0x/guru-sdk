@@ -103,6 +103,7 @@ function isV4HookLockedError(reason: unknown): boolean {
 }
 
 export interface ApplyV4TollParams {
+    tollIn: boolean
     baseToll: { currency: string; amount: bigint }
     quotedAmountToReceive: bigint
     quoteSource: V4QuoteSource
@@ -117,6 +118,7 @@ export interface ApplyV4TollResult {
 }
 
 export function applyV4Toll({
+    tollIn,
     baseToll,
     quotedAmountToReceive,
     quoteSource,
@@ -129,8 +131,10 @@ export function applyV4Toll({
 
     if (toll.amount === 0n) {
         if (quoteSource === 'quoter') {
-            toll.amount = quotedAmountToReceive / TOLL_DIVISOR_20BPS
-            amountQuoted -= toll.amount
+            if (!tollIn) {
+                toll.amount = quotedAmountToReceive / TOLL_DIVISOR_20BPS
+                amountQuoted -= toll.amount
+            }
         }
         // Adapter previews already return Trade.amountOut, which is net of any
         // output-side toll. Keep initialTollAmount at 0 so finalization derives
@@ -398,7 +402,7 @@ export default async function getUniswapV4Route(
     const maxSlippageE3 =
         slippageE2 != null ? BigInt(slippageE2) * 10n : undefined
 
-    const { baseToll, swapAmountIn } = resolveBaseToll(
+    const { tollIn, baseToll, swapAmountIn } = resolveBaseToll(
         addresses,
         tokenIn,
         tokenOut,
@@ -473,6 +477,7 @@ export default async function getUniswapV4Route(
     const selectedAdapter = bestQuote.adapter ?? adapter
     const bestPath = bestQuote.path
     const { toll, amountQuoted, amountToSend, initialTollAmount } = applyV4Toll({
+        tollIn,
         baseToll,
         quotedAmountToReceive: bestQuote.amountToReceive,
         quoteSource: bestQuote.source,
@@ -525,6 +530,7 @@ export default async function getUniswapV4Route(
         amountToSend,
         amountQuoted,
         initialTollAmount,
+        outputTollE3: tollIn ? 0n : undefined,
         maxSlippageE3,
     })
 

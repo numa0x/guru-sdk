@@ -70,7 +70,7 @@ export default async function getVeloraRoute(
         FundVault__factory.connect(vault, provider).controller(),
     ])
 
-    const { baseToll, swapAmountIn } = resolveBaseToll(
+    const { tollIn, baseToll, swapAmountIn } = resolveBaseToll(
         addresses,
         tokenIn,
         tokenOut,
@@ -109,6 +109,7 @@ export default async function getVeloraRoute(
                         dex,
                         cachedPath,
                         amountIn: swapAmountIn,
+                        tollIn,
                         toll,
                         vault,
                         controller,
