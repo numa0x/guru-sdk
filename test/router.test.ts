@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { tryWithVeloraFallback } from '../src/router'
-import { getGuruProtocolAddresses } from '../src/addresses'
+import { getGuruProtocolAddresses, isSupportedChainId } from '../src/addresses'
 import { applyV4Toll } from '../src/router/getUniswapV4Route'
 import type { Route } from '../src/router'
 import { SUPPORTED_DEXS } from '../src/router/constants'
@@ -192,7 +192,7 @@ test('applyV4Toll deducts output toll when toll is not on input', () => {
     assert.equal(route.initialTollAmount, 0n)
 })
 
-test('quoteWethTrade finalizes fallback min-out through max slippage when sims fail', async () => {
+test('quoteWethTrade rejects fallback route when all simulations fail', async () => {
     const weth = '0x4200000000000000000000000000000000000006'
     const token = '0x09f87f948c88848363b124c9099cbb58e4cc7cb6'
     const adapter = '0xefccd55c1c4a471d72f37f84d65361ed708d22d7'
@@ -215,27 +215,28 @@ test('quoteWethTrade finalizes fallback min-out through max slippage when sims f
         getDexData: () => ({ type: 'v2', kind: 'uniswap' }),
     } as unknown as PoolHelper
 
-    const route = await quoteWethTrade({
-        feeTier: 0,
-        input: {
-            tokenIn: weth,
-            tokenOut: token,
-            amountIn: 1000n,
-            slippage: 500n,
-        },
-        poolHelper,
-        finalization: {
-            blockNumber: 1,
-            controller: '0x0000000000000000000000000000000000000001',
-            vault: '0x0000000000000000000000000000000000000002',
-            account: '0x0000000000000000000000000000000000000003',
-            simulator: async () => ({ success: false }),
-            maxSlippageE3: 6000n,
-        },
-    })
-
-    assert.equal(route.data.amountToReceive, 940n)
-    assert.equal(route.toll.amount, 2n)
+    await assert.rejects(
+        () =>
+            quoteWethTrade({
+                feeTier: 0,
+                input: {
+                    tokenIn: weth,
+                    tokenOut: token,
+                    amountIn: 1000n,
+                    slippage: 500n,
+                },
+                poolHelper,
+                finalization: {
+                    blockNumber: 1,
+                    controller: '0x0000000000000000000000000000000000000001',
+                    vault: '0x0000000000000000000000000000000000000002',
+                    account: '0x0000000000000000000000000000000000000003',
+                    simulator: async () => ({ success: false }),
+                    maxSlippageE3: 6000n,
+                },
+            }),
+        /NO_EXECUTABLE_ROUTE_FOUND/
+    )
 })
 
 test('Base Velora config enables Aerodrome routes', () => {
@@ -254,6 +255,26 @@ test('Base Velora config enables Aerodrome routes', () => {
         cfg.AerodromeV3?.quoterAddress,
         addresses.quoters.aerodromeV3
     )
+})
+
+test('Robinhood address registry exposes Lotus, USDG, and Uniswap routes', () => {
+    assert.equal(isSupportedChainId(4663), true)
+
+    const addresses = getGuruProtocolAddresses(4663)
+    const cfg = buildVeloraDexConfig(addresses)
+
+    assert.equal(
+        addresses.protocol,
+        '0xe0d99cd8bf9f091713c88ff763d669ad3703876c'
+    )
+    assert.equal(
+        addresses.tokens.USDG,
+        '0x5fc5360d0400a0fd4f2af552add042d716f1d168'
+    )
+    assert.equal(addresses.tokens.USDC, addresses.tokens.USDG)
+    assert.equal(addresses.tokens.USDT, addresses.tokens.USDG)
+    assert.equal(cfg.UniswapV2?.adapter, addresses.adapters.uniswapV2)
+    assert.equal(cfg.UniswapV3?.adapter, addresses.adapters.uniswapV3)
 })
 
 test('extractPathFromResponse preserves Aerodrome V2 route metadata', () => {

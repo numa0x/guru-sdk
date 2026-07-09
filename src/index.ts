@@ -14,6 +14,7 @@ export type { GuruProtocolOptions } from './GuruProtocol'
 
 export type {
     BuildDepositTxParams,
+    BuildCloseTxParams,
     BuildHarvestTxParams,
     BuildTradeTxParams,
     BuildWithdrawTxParams,
@@ -35,6 +36,7 @@ export type {
     QuoteHarvestResult,
     QuoteHarvestLogs,
 } from './quotes/quoteHarvest'
+export type { QuoteCloseParams, QuoteCloseResult } from './quotes/quoteClose'
 export type {
     QuoteRebalanceParams,
     QuoteRebalanceResult,

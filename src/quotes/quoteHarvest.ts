@@ -23,6 +23,7 @@ import FundDataFetcher, {
     type GetPriceUsd1e18,
 } from '../helpers/FundDataFetcher'
 import { getRouteOut, type RouterContext } from '../router'
+import { stablecoinAddresses } from '../router/helpers'
 import { quoteHarvestSchema } from '../schemas/quoteHarvest'
 import buildHarvestTx from '../txBuilders/buildHarvestTx'
 import { FundLedger__factory, HarvestController__factory } from '../typechain'
@@ -32,7 +33,7 @@ export type ExternalCallStruct = { adapter: AddressLike; callData: BytesLike }
 
 export interface QuoteHarvestParams {
     ledger: string
-    /** Stablecoin to harvest into. Must be `addresses.tokens.USDC` or `.USDT`. */
+    /** Stablecoin to harvest into. Must be a stablecoin in `addresses.tokens`. */
     coin: string
     /**
      * Optional override for management fee eligibility. When omitted, the SDK
@@ -90,9 +91,9 @@ export default async function quoteHarvest(
     const parsed = quoteHarvestSchema.parse(params)
 
     const addresses = getGuruProtocolAddresses(ctx.chainId)
-    const isStablecoin =
-        compareAddresses(parsed.coin, addresses.tokens.USDC) ||
-        compareAddresses(parsed.coin, addresses.tokens.USDT)
+    const isStablecoin = stablecoinAddresses(addresses).some((stable) =>
+        compareAddresses(parsed.coin, stable)
+    )
     if (!isStablecoin) {
         throw new Error(
             `[@guru-fund/sdk] quoteHarvest: coin ${parsed.coin} is not a supported stablecoin on chainId ${ctx.chainId}`

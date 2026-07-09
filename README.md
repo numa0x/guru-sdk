@@ -23,7 +23,7 @@ import { GuruProtocol } from '@guru-fund/sdk'
 
 const protocol = new GuruProtocol({
     rpcUrl: 'https://mainnet.infura.io/v3/<key>',
-    chainId: 1, // mainnet (1) and base (8453) are supported
+    chainId: 1, // mainnet (1), base (8453), and Robinhood (4663) are supported
 })
 ```
 
@@ -32,7 +32,7 @@ const protocol = new GuruProtocol({
 -   Builds an internal `JsonRpcProvider(rpcUrl)`. Do not pass a provider in.
 -   Resolves the Guru Protocol contract addresses from the SDK's vendored registry. Do
     not pass contracts in.
--   Throws `UnsupportedChainError` for any chain outside `{ 1, 8453 }`.
+-   Throws `UnsupportedChainError` for any chain outside `{ 1, 8453, 4663 }`.
 
 Optional override slots (`GuruProtocolOptions`): `simulator`, `getSwapFeePercentage`,
 `getPriceUsd1e18`, `veloraEndpoint`, `getPath`. Each has a sensible default —
@@ -213,7 +213,7 @@ const decoded = quote.decodeLogs(receipt!.logs) ?? {
 ## Errors
 
 -   `UnsupportedChainError` — thrown by the constructor on `chainId` outside
-    `{ 1, 8453 }`.
+    `{ 1, 8453, 4663 }`.
 -   `z.ZodError` — thrown by quote methods on malformed inputs (zod schema at
     the SDK boundary parses every quote method's input).
 -   `SdkError` — internal errors (e.g., `EVENT_NOT_FOUND` from the receipt

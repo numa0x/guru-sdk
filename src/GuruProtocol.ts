@@ -16,6 +16,10 @@ import quoteHarvest, {
     type QuoteHarvestParams,
     type QuoteHarvestResult,
 } from './quotes/quoteHarvest'
+import quoteClose, {
+    type QuoteCloseParams,
+    type QuoteCloseResult,
+} from './quotes/quoteClose'
 import quoteRebalance, {
     type QuoteRebalanceParams,
     type QuoteRebalanceResult,
@@ -31,6 +35,7 @@ import quoteWithdrawal, {
 import { getPriceUsd1e18 as defaultGetPriceUsd1e18 } from './router'
 import { getPath as defaultGetPath, type PathFetcher } from './router/pathCache'
 import type { SwapSimulator } from './router/simulation'
+import buildCloseTx from './txBuilders/buildCloseTx'
 import buildDepositTx from './txBuilders/buildDepositTx'
 import buildHarvestTx from './txBuilders/buildHarvestTx'
 import buildTradeTx from './txBuilders/buildTradeTx'
@@ -155,6 +160,10 @@ export class GuruProtocol {
         return quoteHarvest(params, this.routerCtx())
     }
 
+    quoteClose(params: QuoteCloseParams): Promise<QuoteCloseResult> {
+        return quoteClose(params, this.routerCtx())
+    }
+
     quoteRebalance(
         params: QuoteRebalanceParams
     ): Promise<QuoteRebalanceResult> {
@@ -162,6 +171,7 @@ export class GuruProtocol {
     }
 
     static buildDepositTx = buildDepositTx
+    static buildCloseTx = buildCloseTx
     static buildWithdrawTx = buildWithdrawTx
     static buildHarvestTx = buildHarvestTx
     static buildTradeTx = buildTradeTx

@@ -1,4 +1,10 @@
-import { AbiCoder, keccak256, type Provider } from 'ethers'
+import {
+    AbiCoder,
+    keccak256,
+    zeroPadValue,
+    type Log,
+    type Provider,
+} from 'ethers'
 
 import {
     getGuruProtocolAddresses,
@@ -30,6 +36,11 @@ const V4_CHAIN_CONFIG: Record<
         dexscreenerSlug: 'base',
         poolManager: '0x498581ff718922c3f8e6a244956af099b2652b2b',
         deployBlock: 25_000_000, // shortly before the V4 PoolManager deploy
+    },
+    4663: {
+        dexscreenerSlug: 'robinhood',
+        poolManager: '0x8366a39cc670b4001a1121b8f6a443a643e40951',
+        deployBlock: 0,
     },
 }
 
@@ -156,6 +167,21 @@ async function resolvePoolKey(
     const log = logs[0]
     if (!log) return null
 
+    const key = poolKeyFromInitializeLog(log)
+    if (!key) return null
+
+    if (computeV4PoolId(key).toLowerCase() !== poolId.toLowerCase()) {
+        return null
+    }
+
+    poolKeyCache.set(cacheKey, key)
+    return key
+}
+
+function poolKeyFromInitializeLog(log: Log): V4PoolKey | null {
+    const poolId = log.topics[1]
+    if (!poolId || !log.topics[2] || !log.topics[3]) return null
+
     const [fee, tickSpacing, hooks] = AbiCoder.defaultAbiCoder().decode(
         ['uint24', 'int24', 'address', 'uint160', 'int24'],
         log.data
@@ -173,7 +199,6 @@ async function resolvePoolKey(
         return null
     }
 
-    poolKeyCache.set(cacheKey, key)
     return key
 }
 
@@ -264,7 +289,13 @@ async function discoverDirectV4Paths(
     // exotic side first — one side is always WETH/a stablecoin in our flows —
     // and only fall back to the other side's listing if it yields nothing.
     const { tokens } = getGuruProtocolAddresses(chainId)
-    const majors = [tokens.WETH, tokens.USDC, tokens.USDT, V4_ZERO_ADDRESS]
+    const majors = [
+        tokens.WETH,
+        tokens.USDC,
+        tokens.USDT,
+        tokens.USDG,
+        V4_ZERO_ADDRESS,
+    ].filter((token): token is string => Boolean(token))
     const isMajor = (token: string) =>
         majors.some((major) => compareAddresses(major, token))
     const queryOrder = isMajor(tokenIn) ? [tokenOut, tokenIn] : [tokenIn, tokenOut]
@@ -287,7 +318,19 @@ async function discoverDirectV4Paths(
         poolIds.map((poolId) => resolvePoolKey(chainId, poolId, provider))
     )
 
-    const paths: V4Path[] = keys
+    const resolvedKeys = keys.filter((key): key is V4PoolKey => key !== null)
+    const onchainKeys =
+        resolvedKeys.length > 0
+            ? []
+            : await discoverOnchainDirectV4PoolKeys(
+                  chainId,
+                  tokenIn,
+                  tokenOut,
+                  provider
+              )
+
+    const paths: V4Path[] = resolvedKeys
+        .concat(onchainKeys)
         .filter((key): key is V4PoolKey => key !== null)
         .map((key) => [
             {
@@ -300,6 +343,36 @@ async function discoverDirectV4Paths(
             },
         ])
     return paths
+}
+
+async function discoverOnchainDirectV4PoolKeys(
+    chainId: GuruProtocolChainId,
+    tokenIn: string,
+    tokenOut: string,
+    provider: Provider
+): Promise<V4PoolKey[]> {
+    const config = V4_CHAIN_CONFIG[chainId]
+    const [currency0, currency1] =
+        tokenIn.toLowerCase() < tokenOut.toLowerCase()
+            ? [tokenIn, tokenOut]
+            : [tokenOut, tokenIn]
+
+    const logs = await provider.getLogs({
+        address: config.poolManager,
+        topics: [
+            POOL_INITIALIZE_TOPIC,
+            null,
+            zeroPadValue(currency0, 32),
+            zeroPadValue(currency1, 32),
+        ],
+        fromBlock: config.deployBlock,
+        toBlock: 'latest',
+    })
+
+    return logs
+        .map(poolKeyFromInitializeLog)
+        .filter((key): key is V4PoolKey => key !== null)
+        .sort((a, b) => a.fee - b.fee)
 }
 
 /** Test-only: clear the in-memory discovery caches. */

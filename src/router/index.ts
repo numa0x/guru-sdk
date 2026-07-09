@@ -18,6 +18,7 @@ import getUniswapV4Route, {
     type GetUniswapV4RouteContext,
 } from './getUniswapV4Route'
 import getVeloraRoute, { type GetVeloraRouteContext } from './getVeloraRoute'
+import { stablecoinAddresses } from './helpers'
 import type { PathFetcher } from './pathCache'
 import PoolHelper from './poolHelper'
 import type { SwapSimulator } from './simulation'
@@ -270,8 +271,9 @@ export async function getPriceUsd1e18(
     )
 
     if (
-        compareAddresses(token, addresses.tokens.USDC) ||
-        compareAddresses(token, addresses.tokens.USDT)
+        stablecoinAddresses(addresses).some((stable) =>
+            compareAddresses(token, stable)
+        )
     ) {
         return 10n ** 18n
     }
@@ -284,7 +286,7 @@ export async function getPriceUsd1e18(
 
     // Pricing scans every DEX with on-chain liquidity, including those without
     // a Guru Protocol adapter — we only need a price, not a swap route.
-    const stable = addresses.tokens.USDC
+    const stable = addresses.tokens.USDG ?? addresses.tokens.USDC
     const { decimals: stableDecimals } = await new Token(stable, ctx.provider)
         .metadata()
         .catch(() => ({ decimals: 6 }))
@@ -649,7 +651,7 @@ async function _priceViaV4Pools(
         return best > 0n ? best : null
     }
 
-    const inUsdc = await quoteVia(addresses.tokens.USDC)
+    const inUsdc = await quoteVia(addresses.tokens.USDG ?? addresses.tokens.USDC)
     if (inUsdc !== null) {
         return inUsdc * 10n ** 12n // USDC (1e6) → USD 1e18
     }

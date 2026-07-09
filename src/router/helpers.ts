@@ -24,6 +24,16 @@ export interface BaseTollContext {
     swapAmountIn: bigint
 }
 
+export function stablecoinAddresses(
+    addresses: GuruProtocolAddresses
+): string[] {
+    return [
+        addresses.tokens.USDC,
+        addresses.tokens.USDT,
+        addresses.tokens.USDG,
+    ].filter((token): token is string => Boolean(token))
+}
+
 /**
  * Resolves which side of a swap carries the protocol toll and pre-deducts the
  * input-side toll. Throws `INVALID_SWAP` when neither endpoint is tollable —
@@ -37,11 +47,9 @@ export function resolveBaseToll(
     amountIn: bigint
 ): BaseTollContext {
     // Toll currency must be either WETH or a stablecoin we recognise on-chain.
-    const tollableTokens = [
-        addresses.tokens.USDC.toLowerCase(),
-        addresses.tokens.USDT.toLowerCase(),
-        addresses.tokens.WETH.toLowerCase(),
-    ]
+    const tollableTokens = stablecoinAddresses(addresses)
+        .concat(addresses.tokens.WETH)
+        .map((token) => token.toLowerCase())
 
     const tollIn = tollableTokens.some((token) =>
         compareAddresses(token, tokenIn)

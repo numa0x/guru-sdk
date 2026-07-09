@@ -1,11 +1,21 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { AbiCoder, zeroPadValue, type Provider } from 'ethers'
 
 import { V4_ZERO_ADDRESS } from '../src/router/constants'
-import { stitchNativeBridgeV4Paths } from '../src/router/v4PoolDiscovery'
+import {
+    _clearV4DiscoveryCache,
+    computeV4PoolId,
+    discoverV4Paths,
+    stitchNativeBridgeV4Paths,
+} from '../src/router/v4PoolDiscovery'
 
 const USDT = '0xdac17f958d2ee523a2206206994597c13d831ec7'
 const ROOK = '0xaebb159c997a36d6de9efe1da4bf8262060899b3'
+const USDG = '0x5fc5360d0400a0fd4f2af552add042d716f1d168'
+const NVDA = '0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec'
+const POOL_INITIALIZE_TOPIC =
+    '0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438'
 
 test('stitches ERC20 -> native -> ERC20 V4 bridge paths', () => {
     const paths = stitchNativeBridgeV4Paths(
@@ -74,4 +84,56 @@ test('does not stitch paths unless native is the shared intermediate', () => {
     )
 
     assert.equal(paths.length, 0)
+})
+
+test('discovers direct V4 pools from PoolManager logs when Dexscreener misses them', async () => {
+    _clearV4DiscoveryCache()
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+        new Response(JSON.stringify([]), { status: 200 })) as typeof fetch
+
+    const poolKey = {
+        currency0: USDG,
+        currency1: NVDA,
+        fee: 3000,
+        tickSpacing: 60,
+        hooks: V4_ZERO_ADDRESS,
+    }
+    const poolId = computeV4PoolId(poolKey)
+    const provider = {
+        getLogs: async () => [
+            {
+                topics: [
+                    POOL_INITIALIZE_TOPIC,
+                    poolId,
+                    zeroPadValue(USDG, 32),
+                    zeroPadValue(NVDA, 32),
+                ],
+                data: AbiCoder.defaultAbiCoder().encode(
+                    ['uint24', 'int24', 'address', 'uint160', 'int24'],
+                    [poolKey.fee, poolKey.tickSpacing, poolKey.hooks, 1n, 1]
+                ),
+            },
+        ],
+    } as unknown as Provider
+
+    try {
+        const paths = await discoverV4Paths(4663, USDG, NVDA, provider)
+
+        assert.deepEqual(paths, [
+            [
+                {
+                    tokenIn: USDG,
+                    tokenOut: NVDA,
+                    fee: 3000,
+                    tickSpacing: 60,
+                    hooks: V4_ZERO_ADDRESS,
+                    hookData: '0x',
+                },
+            ],
+        ])
+    } finally {
+        globalThis.fetch = originalFetch
+        _clearV4DiscoveryCache()
+    }
 })

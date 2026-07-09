@@ -1,4 +1,4 @@
-export type GuruProtocolChainId = 1 | 8453
+export type GuruProtocolChainId = 1 | 8453 | 4663
 
 type AdapterKey =
     | 'uniswapV2'
@@ -45,6 +45,7 @@ export type GuruProtocolAddresses = {
         WETH: string
         USDC: string
         USDT: string
+        USDG?: string
     }>
 
     readonly migrator?: string
@@ -169,20 +170,66 @@ const BASE: GuruProtocolAddresses = {
     migrator: '0x209656784c8eb405765288c8f447d11c0aa1a3d3',
 } as const
 
+const ROBINHOOD: GuruProtocolAddresses = {
+    chainId: 4663,
+
+    protocol: '0xe0d99cd8bf9f091713c88ff763d669ad3703876c',
+    vaultImplementation: '0x70451b00c42a73ea2d9707ddc7413aff8620be85',
+    ledgerImplementation: '0xa8644a5eb1cf74f0d8c7771d3bca9cb5f4edd6a5',
+
+    controllers: {
+        fund: '0x36e2de2f1b66ecaa5fda2196abb88ce663616533',
+    },
+
+    adapters: {
+        uniswapV2: '0xdeb704836165043c172ae80467249ff87429605f',
+        uniswapV3: '0x34e1efca367b1686af9bc3eb9a593c02c2b295f6',
+        uniswapV4: '0x907e28e12a36a41a9cf01e1f455f4778408da198',
+    },
+
+    factories: {
+        uniswapV2: '0x8bceaa40b9acdfaedf85adf4ff01f5ad6517937f',
+        uniswapV3: '0x1f7d7550b1b028f7571e69a784071f0205fd2efa',
+    },
+
+    routers: {
+        uniswapV2: '0x89e5db8b5aa49aa85ac63f691524311aeb649eba',
+        // SwapRouter02 variant — see `UniswapV3SwapRouter02Adapter`.
+        uniswapV3: '0xcaf681a66d020601342297493863e78c959e5cb2',
+        uniswapV4: '0x8876789976decbfcbbbe364623c63652db8c0904',
+    },
+
+    quoters: {
+        uniswapV3: '0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7',
+        uniswapV4: '0x8dc178efb8111bb0973dd9d722ebeff267c98f94',
+    },
+
+    tokens: {
+        WETH: '0x0bd7d308f8e1639fab988df18a8011f41eacad73',
+        // Robinhood currently exposes USDG as the stable anchor. USDC/USDT are
+        // compatibility aliases for SDK call sites that expect those keys.
+        USDC: '0x5fc5360d0400a0fd4f2af552add042d716f1d168',
+        USDT: '0x5fc5360d0400a0fd4f2af552add042d716f1d168',
+        USDG: '0x5fc5360d0400a0fd4f2af552add042d716f1d168',
+    },
+} as const
+
 export const GURU_PROTOCOL_ADDRESSES: Readonly<
     Record<GuruProtocolChainId, GuruProtocolAddresses>
 > = {
     1: MAINNET,
     8453: BASE,
+    4663: ROBINHOOD,
 }
 
 export const SUPPORTED_CHAIN_IDS: readonly GuruProtocolChainId[] = [
-    1, 8453,
+    1, 8453, 4663,
 ] as const
 
 export const isSupportedChainId = (
     chainId: number
-): chainId is GuruProtocolChainId => chainId === 1 || chainId === 8453
+): chainId is GuruProtocolChainId =>
+    chainId === 1 || chainId === 8453 || chainId === 4663
 
 export function getGuruProtocolAddresses(
     chainId: number

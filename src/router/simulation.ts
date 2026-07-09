@@ -194,18 +194,8 @@ export async function findMaxPassingAmountToReceive({
         .filter((index) => index !== -1)
 
     if (successIndices.length === 0) {
-        if (maxSlippageE3) {
-            const fallback = withSlippageTolerance(amountQuoted, maxSlippageE3)
-            console.warn(
-                `[findMax] All ${BUNDLE_SIMULATION_CANDIDATES} simulation candidates failed. ` +
-                    `Falling back to caller-provided max slippage (${Number(maxSlippageE3) / 1000}%).`,
-                { amountQuoted, fallback, maxSlippageE3 }
-            )
-            return fallback
-        }
-
         console.warn(
-            'Found no successful simulations with correct slippage, returning initial slippage',
+            'Found no successful simulations for executable route quote',
             {
                 chainId,
                 blockNumber,
@@ -221,7 +211,7 @@ export async function findMaxPassingAmountToReceive({
                 path,
             }
         )
-        return amountWithSlippage
+        throw new Error('NO_EXECUTABLE_ROUTE_FOUND')
     }
 
     // successIndices are ascending (candidates are descending), so [1] = second-highest amount = safer pick

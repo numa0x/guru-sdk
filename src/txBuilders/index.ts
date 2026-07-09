@@ -1,5 +1,7 @@
 export { default as buildDepositTx } from './buildDepositTx'
 export type { BuildDepositTxParams } from './buildDepositTx'
+export { default as buildCloseTx } from './buildCloseTx'
+export type { BuildCloseTxParams } from './buildCloseTx'
 export { default as buildWithdrawTx } from './buildWithdrawTx'
 export type { BuildWithdrawTxParams } from './buildWithdrawTx'
 export { default as buildHarvestTx } from './buildHarvestTx'
