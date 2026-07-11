@@ -15,6 +15,7 @@ import {
     DEXSCREENER_ENDPOINT,
     V4_ZERO_ADDRESS,
     V4_DISCOVERY_MAX_POOLS,
+    V4_DISCOVERY_MAX_LP_FEE,
     V4_DISCOVERY_MIN_LIQUIDITY_USD,
     VELORA_NEGATIVE_CACHE_TTL,
     VELORA_PATH_CACHE_TTL,
@@ -56,6 +57,16 @@ export interface V4PoolKey {
     fee: number
     tickSpacing: number
     hooks: string
+}
+
+/**
+ * Discovery sources are untrusted. Reject pools whose immutable LP fee alone
+ * can consume more than 10% of a swap. This also rejects dynamic-fee keys,
+ * whose flag is encoded above the static-fee range; those need an aggregator
+ * or an explicit allowlist that can validate the effective fee.
+ */
+export function isSafeDiscoveredV4PoolKey(key: V4PoolKey): boolean {
+    return key.fee >= 0 && key.fee <= V4_DISCOVERY_MAX_LP_FEE
 }
 
 /** Recompute a poolId from its key: keccak256(abi.encode(PoolKey)). */
@@ -318,7 +329,10 @@ async function discoverDirectV4Paths(
         poolIds.map((poolId) => resolvePoolKey(chainId, poolId, provider))
     )
 
-    const resolvedKeys = keys.filter((key): key is V4PoolKey => key !== null)
+    const resolvedKeys = keys.filter(
+        (key): key is V4PoolKey =>
+            key !== null && isSafeDiscoveredV4PoolKey(key)
+    )
     const onchainKeys =
         resolvedKeys.length > 0
             ? []
@@ -371,7 +385,10 @@ async function discoverOnchainDirectV4PoolKeys(
 
     return logs
         .map(poolKeyFromInitializeLog)
-        .filter((key): key is V4PoolKey => key !== null)
+        .filter(
+            (key): key is V4PoolKey =>
+                key !== null && isSafeDiscoveredV4PoolKey(key)
+        )
         .sort((a, b) => a.fee - b.fee)
 }
 

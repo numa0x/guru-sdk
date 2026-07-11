@@ -70,3 +70,11 @@ export const V4_DISCOVERY_MIN_LIQUIDITY_USD = 10_000
 
 /** Quote at most this many discovered pools per pair (deepest first). */
 export const V4_DISCOVERY_MAX_POOLS = 3
+
+/**
+ * Maximum LP fee accepted from discovery-only V4 pools (10%). V4 encodes
+ * static fees in millionths, so 100_000 = 10%. Discovery is an untrusted
+ * fallback and must never make an economically catastrophic pool executable
+ * merely because its own quote can be simulated successfully.
+ */
+export const V4_DISCOVERY_MAX_LP_FEE = 100_000

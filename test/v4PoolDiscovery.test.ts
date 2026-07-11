@@ -7,6 +7,7 @@ import {
     _clearV4DiscoveryCache,
     computeV4PoolId,
     discoverV4Paths,
+    isSafeDiscoveredV4PoolKey,
     stitchNativeBridgeV4Paths,
 } from '../src/router/v4PoolDiscovery'
 
@@ -16,6 +17,32 @@ const USDG = '0x5fc5360d0400a0fd4f2af552add042d716f1d168'
 const NVDA = '0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec'
 const POOL_INITIALIZE_TOPIC =
     '0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438'
+
+test('rejects the 92% Robinhood USDG/FIH V4 pool used in the loss transaction', () => {
+    assert.equal(
+        isSafeDiscoveredV4PoolKey({
+            currency0: USDG,
+            currency1: '0x4b3a3ff4ec9d289727e24a8152f406bada44264d',
+            fee: 920_000,
+            tickSpacing: 18_400,
+            hooks: V4_ZERO_ADDRESS,
+        }),
+        false
+    )
+})
+
+test('accepts ordinary discovered V4 static fees', () => {
+    assert.equal(
+        isSafeDiscoveredV4PoolKey({
+            currency0: USDG,
+            currency1: NVDA,
+            fee: 10_000,
+            tickSpacing: 200,
+            hooks: V4_ZERO_ADDRESS,
+        }),
+        true
+    )
+})
 
 test('stitches ERC20 -> native -> ERC20 V4 bridge paths', () => {
     const paths = stitchNativeBridgeV4Paths(

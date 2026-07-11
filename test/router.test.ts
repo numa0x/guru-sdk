@@ -360,7 +360,7 @@ test('extractPathFromResponse uses Aerodrome V3 tick spacing for Slipstream path
 
 // ─── Uniswap V4 route source ─────────────────────────────────────────────────
 
-import { veloraThenV4Discovery } from '../src/router'
+import { bestOfV4AndFallback, veloraThenV4Discovery } from '../src/router'
 import {
     applyV4Toll,
     toAdapterPathKeys,
@@ -430,6 +430,29 @@ test('veloraThenV4Discovery: both miss → error propagates (triggers fallback)'
         ),
         /NO_UNISWAP_V4_ROUTES_FOUND/
     )
+})
+
+test('bestOfV4AndFallback: rejects an executable but economically worse V4 quote', async () => {
+    const v4 = fakeRoute('fallback')
+    const fallback = fakeRoute('velora')
+
+    const result = await bestOfV4AndFallback(
+        async () => v4,
+        async () => fallback
+    )
+
+    assert.equal(result.data.amountToReceive, 100n)
+})
+
+test('bestOfV4AndFallback: keeps a V4-only route when ordinary fallback fails', async () => {
+    const result = await bestOfV4AndFallback(
+        async () => fakeRoute('fallback'),
+        async () => {
+            throw new Error('NO_V2_V3_ROUTE')
+        }
+    )
+
+    assert.equal(result.data.amountToReceive, 50n)
 })
 
 // ─── V4 pool discovery ───────────────────────────────────────────────────────

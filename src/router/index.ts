@@ -159,6 +159,43 @@ export async function veloraThenV4Discovery(
 }
 
 /**
+ * Compare discovery-only V4 against the ordinary on-chain fallback and return
+ * the economically better executable route. Both route families expose a
+ * net `amountToReceive`, so this comparison is like-for-like for exact-input
+ * trades. A successful V4 simulation alone is not evidence that its price is
+ * competitive.
+ */
+export async function bestOfV4AndFallback(
+    v4Discovery: () => Promise<Route>,
+    fallback: () => Promise<Route>
+): Promise<Route> {
+    const [v4Result, fallbackResult] = await Promise.allSettled([
+        v4Discovery(),
+        fallback(),
+    ])
+
+    if (
+        v4Result.status === 'rejected' &&
+        v4Result.reason instanceof Error &&
+        (v4Result.reason.message.includes('TOKEN_LOCKED_BY_V4_HOOK') ||
+            v4Result.reason.message.includes('UNISWAP_V4_HOOK_ROUTE_REVERTED'))
+    ) {
+        throw v4Result.reason
+    }
+
+    if (v4Result.status === 'fulfilled' && fallbackResult.status === 'fulfilled') {
+        return BigInt(v4Result.value.data.amountToReceive) >=
+            BigInt(fallbackResult.value.data.amountToReceive)
+            ? v4Result.value
+            : fallbackResult.value
+    }
+    if (v4Result.status === 'fulfilled') return v4Result.value
+    if (fallbackResult.status === 'fulfilled') return fallbackResult.value
+
+    throw fallbackResult.reason
+}
+
+/**
  * Returns the result of `velora()` if it resolves, otherwise the result of
  * `fallback()`. Mirrors the original `apps/trpc/src/services/get-route` shape:
  * a single try/catch with a console.error on the velora failure path.
@@ -206,14 +243,14 @@ export async function getRouteIn(
         simulator: ctx.simulator,
         getSwapFeePercentage: ctx.getSwapFeePercentage,
     }
-    return tryWithVeloraFallback(
-        () =>
-            veloraThenV4Discovery(
-                () => getVeloraRoute(params, veloraCtx),
-                () => getUniswapV4Route(params, v4Ctx)
-            ),
-        () => getFallbackRouteIn(params, fallbackCtx)
-    )
+    try {
+        return await getVeloraRoute(params, veloraCtx)
+    } catch {
+        return bestOfV4AndFallback(
+            () => getUniswapV4Route(params, v4Ctx),
+            () => getFallbackRouteIn(params, fallbackCtx)
+        )
+    }
 }
 
 export async function getRouteOut(
@@ -234,14 +271,14 @@ export async function getRouteOut(
         simulator: ctx.simulator,
         getSwapFeePercentage: ctx.getSwapFeePercentage,
     }
-    return tryWithVeloraFallback(
-        () =>
-            veloraThenV4Discovery(
-                () => getVeloraRoute(params, veloraCtx),
-                () => getUniswapV4Route(params, v4Ctx)
-            ),
-        () => getFallbackRouteOut(params, fallbackCtx)
-    )
+    try {
+        return await getVeloraRoute(params, veloraCtx)
+    } catch {
+        return bestOfV4AndFallback(
+            () => getUniswapV4Route(params, v4Ctx),
+            () => getFallbackRouteOut(params, fallbackCtx)
+        )
+    }
 }
 
 /**
