@@ -22,6 +22,7 @@ import { stablecoinAddresses } from './helpers'
 import type { PathFetcher } from './pathCache'
 import PoolHelper from './poolHelper'
 import type { SwapSimulator } from './simulation'
+import { V4_ZERO_ADDRESS } from './constants'
 import type { Route, RouteSearchParams } from './types'
 import { discoverV4Paths } from './v4PoolDiscovery'
 
@@ -686,6 +687,18 @@ async function _priceViaV4Pools(
             if (amountOut > best) best = amountOut
         }
         return best > 0n ? best : null
+    }
+
+    // Uniswap V4 represents native ETH as address(0), while the rest of the
+    // SDK uses WETH as its native-value anchor. A token/native pool is already
+    // sufficient for USD pricing; it must not require a separate native/WETH
+    // V4 bridge pool to exist. Probe this first because Robinhood tokenized
+    // equities commonly use direct token/native pools; doing so also avoids
+    // several doomed bridge-discovery requests per asset.
+    const inNative = await quoteVia(V4_ZERO_ADDRESS)
+    if (inNative !== null) {
+        const wethUsd = await getWethUsd()
+        return (inNative * wethUsd) / WETH_UNIT
     }
 
     const inUsdc = await quoteVia(addresses.tokens.USDG ?? addresses.tokens.USDC)

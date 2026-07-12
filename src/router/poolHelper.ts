@@ -95,10 +95,14 @@ interface AeroV3FactoryLike {
     ) => Promise<string>
 }
 
-const V3_POOL_ABI = ['function fee() view returns (uint24)'] as const
+const V3_POOL_ABI = [
+    'function fee() view returns (uint24)',
+    'function liquidity() view returns (uint128)',
+] as const
 
 interface V3PoolLike {
     fee: () => Promise<bigint>
+    liquidity: () => Promise<bigint>
 }
 
 const AERO_FACTORY_ABI = [
@@ -302,6 +306,20 @@ export type Pool = {
     feeTier: FeeTier
     exchangeFactory: string
     wethBalance: bigint
+    activeLiquidity?: bigint
+}
+
+/** Exclude inert V3 pools, then rank remaining pools by WETH depth. */
+export function rankUsablePools(pools: Pool[]): Pool[] {
+    return pools
+        .filter(
+            (pool) => pool.feeTier === 0 || (pool.activeLiquidity ?? 0n) > 0n
+        )
+        .sort((a, b) => {
+            if (a.wethBalance > b.wethBalance) return -1
+            if (a.wethBalance < b.wethBalance) return 1
+            return 0
+        })
 }
 
 type Quote = {
@@ -555,8 +573,9 @@ export default class PoolHelper {
 
     /**
      * Query all supported DEXes on-chain for `$TOKEN/$WETH` pools. Returns
-     * every pool that exists with non-zero WETH balance, sorted descending by
-     * `wethBalance` (deepest first). Callers that need a single best pick can
+     * every pool that exists with non-zero WETH balance and, for V3, non-zero
+     * active liquidity, sorted descending by `wethBalance` (deepest first).
+     * Callers that need a single best pick can
      * use `getUniswapCompatibleTokenPool`; callers that may need to fall back
      * (e.g. quoters that revert on a tightly-ranged pool) iterate the list.
      */
@@ -650,12 +669,19 @@ export default class PoolHelper {
                                 const wethBalance =
                                     await wethToken.balanceOf(poolAddress)
                                 if (wethBalance === 0n) return
+                                const pool = connect<V3PoolLike>(
+                                    poolAddress,
+                                    V3_POOL_ABI,
+                                    this.provider
+                                )
+                                const activeLiquidity = await pool.liquidity()
 
                                 pools.push({
                                     address: poolAddress,
                                     feeTier: feeTier as FeeTier,
                                     exchangeFactory: factoryAddress,
                                     wethBalance,
+                                    activeLiquidity,
                                 })
                             } catch {
                                 // ignore
@@ -666,13 +692,7 @@ export default class PoolHelper {
             })
         )
 
-        pools.sort((a, b) => {
-            if (a.wethBalance > b.wethBalance) return -1
-            if (a.wethBalance < b.wethBalance) return 1
-            return 0
-        })
-
-        return pools
+        return rankUsablePools(pools)
     }
 
     /**

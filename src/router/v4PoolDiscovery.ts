@@ -2,6 +2,7 @@ import {
     AbiCoder,
     keccak256,
     zeroPadValue,
+    type Filter,
     type Log,
     type Provider,
 } from 'ethers'
@@ -88,6 +89,7 @@ interface DexscreenerPair {
     baseToken?: { address?: string }
     quoteToken?: { address?: string }
     liquidity?: { usd?: number }
+    pairCreatedAt?: number
 }
 
 /**
@@ -162,19 +164,71 @@ const poolKeyCache = new Map<string, V4PoolKey>()
 async function resolvePoolKey(
     chainId: GuruProtocolChainId,
     poolId: string,
-    provider: Provider
+    provider: Provider,
+    pairCreatedAt?: number
 ): Promise<V4PoolKey | null> {
     const cacheKey = `${chainId}:${poolId}`
     const cached = poolKeyCache.get(cacheKey)
     if (cached) return cached
 
     const config = V4_CHAIN_CONFIG[chainId]
-    const logs = await provider.getLogs({
+    const filter: Filter = {
         address: config.poolManager,
         topics: [POOL_INITIALIZE_TOPIC, poolId],
         fromBlock: config.deployBlock,
         toBlock: 'latest',
-    })
+    }
+    let logs: Log[]
+    try {
+        logs = await provider.getLogs(filter)
+    } catch {
+        // Some RPCs (including Alchemy on Robinhood Chain) cap eth_getLogs at
+        // 10,000 blocks. Search newest-first because discovered pools are
+        // generally recent, and stop as soon as the indexed poolId is found.
+        logs = []
+        const latestBlock = await provider.getBlockNumber()
+        const chunkSize = 9_999
+
+        if (pairCreatedAt) {
+            let low = config.deployBlock
+            let high = latestBlock
+            const targetTimestamp = Math.floor(pairCreatedAt / 1_000)
+            while (low < high) {
+                const middle = Math.floor((low + high) / 2)
+                const block = await provider.getBlock(middle)
+                if (!block) break
+                if (block.timestamp < targetTimestamp) low = middle + 1
+                else high = middle
+            }
+
+            const fromBlock = Math.max(config.deployBlock, low - 5_000)
+            const toBlock = Math.min(latestBlock, fromBlock + chunkSize)
+            logs = await provider.getLogs({
+                ...filter,
+                fromBlock,
+                toBlock,
+            })
+        }
+
+        if (logs.length === 0) {
+            for (
+                let toBlock = latestBlock;
+                toBlock >= config.deployBlock;
+                toBlock -= chunkSize + 1
+            ) {
+                const fromBlock = Math.max(config.deployBlock, toBlock - chunkSize)
+                const chunk = await provider.getLogs({
+                    ...filter,
+                    fromBlock,
+                    toBlock,
+                })
+                if (chunk.length > 0) {
+                    logs = chunk
+                    break
+                }
+            }
+        }
+    }
     const log = logs[0]
     if (!log) return null
 
@@ -312,6 +366,7 @@ async function discoverDirectV4Paths(
     const queryOrder = isMajor(tokenIn) ? [tokenOut, tokenIn] : [tokenIn, tokenOut]
 
     let poolIds: string[] = []
+    const pairCreatedAtByPoolId = new Map<string, number>()
     for (const queryToken of queryOrder) {
         const response = await fetch(
             `${endpoint}/${config.dexscreenerSlug}/${queryToken}`
@@ -322,11 +377,27 @@ async function discoverDirectV4Paths(
         }
         const pairs = (await response.json()) as DexscreenerPair[]
         poolIds = selectV4PairPoolIds(pairs, tokenIn, tokenOut)
-        if (poolIds.length > 0) break
+        if (poolIds.length > 0) {
+            for (const pair of pairs) {
+                if (!pair.pairAddress || !pair.pairCreatedAt) continue
+                pairCreatedAtByPoolId.set(
+                    pair.pairAddress.toLowerCase(),
+                    pair.pairCreatedAt
+                )
+            }
+            break
+        }
     }
 
     const keys = await Promise.all(
-        poolIds.map((poolId) => resolvePoolKey(chainId, poolId, provider))
+        poolIds.map((poolId) =>
+            resolvePoolKey(
+                chainId,
+                poolId,
+                provider,
+                pairCreatedAtByPoolId.get(poolId)
+            )
+        )
     )
 
     const resolvedKeys = keys.filter(

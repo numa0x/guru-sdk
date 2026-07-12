@@ -8,6 +8,7 @@ import type { Route } from '../src/router'
 import { SUPPORTED_DEXS } from '../src/router/constants'
 import { extractPathFromResponse } from '../src/router/pathCache'
 import type PoolHelper from '../src/router/poolHelper'
+import { rankUsablePools } from '../src/router/poolHelper'
 import { quoteWethTrade } from '../src/router/quoteWethTrade'
 import { buildVeloraDexConfig } from '../src/router/velora'
 import type {
@@ -26,6 +27,30 @@ const fakeRoute = (label: string): Route => ({
     callData: '0x',
     toll: { currency: '0x', amount: 0n },
     hops: 1,
+})
+
+test('pool ranking rejects a deeper V3 pool with zero active liquidity', () => {
+    const pools = rankUsablePools([
+        {
+            address: '0x95A29612221FAfD6C1CE207b57AdB2d5D7D91252',
+            feeTier: 3000,
+            exchangeFactory: '0xfactory',
+            wethBalance: 1_045n,
+            activeLiquidity: 0n,
+        },
+        {
+            address: '0xed26Ce48B4aea533f526C1Aa6218870E5a52B39D',
+            feeTier: 10000,
+            exchangeFactory: '0xfactory',
+            wethBalance: 1_015n,
+            activeLiquidity: 1_951n,
+        },
+    ])
+
+    assert.deepEqual(
+        pools.map((pool) => pool.feeTier),
+        [10000]
+    )
 })
 
 test('Velora-has-route: returns Velora result, fallback never invoked', async () => {

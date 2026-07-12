@@ -164,3 +164,66 @@ test('discovers direct V4 pools from PoolManager logs when Dexscreener misses th
         _clearV4DiscoveryCache()
     }
 })
+
+test('locates a bounded PoolManager verification range from pair creation time', async () => {
+    _clearV4DiscoveryCache()
+    const originalFetch = globalThis.fetch
+    const poolKey = {
+        currency0: V4_ZERO_ADDRESS,
+        currency1: NVDA,
+        fee: 50_000,
+        tickSpacing: 1_000,
+        hooks: V4_ZERO_ADDRESS,
+    }
+    const poolId = computeV4PoolId(poolKey)
+    globalThis.fetch = (async () =>
+        new Response(
+            JSON.stringify([
+                {
+                    dexId: 'uniswap',
+                    labels: ['v4'],
+                    pairAddress: poolId,
+                    baseToken: { address: NVDA },
+                    quoteToken: { address: V4_ZERO_ADDRESS },
+                    liquidity: { usd: 100_000 },
+                    pairCreatedAt: 10_000_000,
+                },
+            ]),
+            { status: 200 }
+        )) as typeof fetch
+
+    const ranges: Array<[number, number | string]> = []
+    const log = {
+        topics: [
+            POOL_INITIALIZE_TOPIC,
+            poolId,
+            zeroPadValue(V4_ZERO_ADDRESS, 32),
+            zeroPadValue(NVDA, 32),
+        ],
+        data: AbiCoder.defaultAbiCoder().encode(
+            ['uint24', 'int24', 'address', 'uint160', 'int24'],
+            [poolKey.fee, poolKey.tickSpacing, poolKey.hooks, 1n, 1]
+        ),
+    }
+    const provider = {
+        getBlockNumber: async () => 25_000,
+        getBlock: async (blockNumber: number) => ({ timestamp: blockNumber }),
+        getLogs: async ({ fromBlock, toBlock }: { fromBlock: number; toBlock: number | string }) => {
+            ranges.push([fromBlock, toBlock])
+            if (toBlock === 'latest') throw new Error('maximum 10000 block range')
+            return fromBlock === 5_000 ? [log] : []
+        },
+    } as unknown as Provider
+
+    try {
+        const paths = await discoverV4Paths(4663, NVDA, V4_ZERO_ADDRESS, provider)
+        assert.equal(paths.length, 1)
+        assert.deepEqual(ranges, [
+            [0, 'latest'],
+            [5_000, 14_999],
+        ])
+    } finally {
+        globalThis.fetch = originalFetch
+        _clearV4DiscoveryCache()
+    }
+})
