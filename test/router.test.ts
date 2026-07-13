@@ -10,7 +10,11 @@ import { extractPathFromResponse } from '../src/router/pathCache'
 import type PoolHelper from '../src/router/poolHelper'
 import { rankUsablePools } from '../src/router/poolHelper'
 import { quoteWethTrade } from '../src/router/quoteWethTrade'
+import { findMaxPassingAmountToReceive } from '../src/router/simulation'
 import { buildVeloraDexConfig } from '../src/router/velora'
+import buildTradesTx from '../src/txBuilders/buildTradesTx'
+import { bestOfDirectAndComposite } from '../src/quotes/quoteTrade'
+import { FundController__factory } from '../src/typechain'
 import type {
     VeloraRouteResponseAerodromeV2,
     VeloraRouteResponseV3,
@@ -27,6 +31,76 @@ const fakeRoute = (label: string): Route => ({
     callData: '0x',
     toll: { currency: '0x', amount: 0n },
     hops: 1,
+})
+
+test('simulation search is sequential and stops after two passing candidates', async () => {
+    let calls = 0
+    let active = 0
+    let maxActive = 0
+
+    const amount = await findMaxPassingAmountToReceive({
+        chainId: 4663,
+        blockNumber: 1,
+        controller: '0x0000000000000000000000000000000000000001',
+        vault: '0x0000000000000000000000000000000000000002',
+        adapter: '0x0000000000000000000000000000000000000003',
+        account: '0x0000000000000000000000000000000000000004',
+        path: [
+            '0x0000000000000000000000000000000000000005',
+            '0x0000000000000000000000000000000000000006',
+        ],
+        amountQuoted: 1_000n,
+        amountWithSlippage: 990n,
+        amountIn: 1n,
+        buildCallDataForAmount: () => '0x',
+        simulator: async () => {
+            calls += 1
+            active += 1
+            maxActive = Math.max(maxActive, active)
+            await Promise.resolve()
+            active -= 1
+            return { success: calls >= 3 }
+        },
+    })
+
+    assert.equal(calls, 4)
+    assert.equal(maxActive, 1)
+    assert.ok(amount < 990n)
+})
+
+test('trade routing keeps a better executable composite route over direct', async () => {
+    const direct = { ...fakeRoute('direct'), data: { ...fakeRoute('direct').data, amountToReceive: 80n } }
+    const first = fakeRoute('first')
+    const second = { ...fakeRoute('second'), data: { ...fakeRoute('second').data, amountToReceive: 100n } }
+
+    assert.deepEqual(
+        await bestOfDirectAndComposite(
+            async () => direct,
+            async () => [first, second]
+        ),
+        [first, second]
+    )
+})
+
+test('buildTradesTx encodes an atomic executeTrades call', () => {
+    const tx = buildTradesTx({
+        controller: '0x0000000000000000000000000000000000000001',
+        ledger: '0x0000000000000000000000000000000000000002',
+        adapters: [
+            '0x0000000000000000000000000000000000000003',
+            '0x0000000000000000000000000000000000000004',
+        ],
+        callData: ['0x1234', '0xabcd'],
+        from: '0x0000000000000000000000000000000000000005',
+    })
+    const parsed = FundController__factory.createInterface().parseTransaction({
+        data: String(tx.data),
+    })
+    assert.equal(parsed?.name, 'executeTrades')
+    assert.deepEqual([...parsed!.args[1]], [
+        '0x0000000000000000000000000000000000000003',
+        '0x0000000000000000000000000000000000000004',
+    ])
 })
 
 test('pool ranking rejects a deeper V3 pool with zero active liquidity', () => {
@@ -179,6 +253,49 @@ test('quoteWethTrade uses the pre-slipped best quote as amountToReceive', async 
     })
 
     assert.equal(route.data.amountToReceive, 950n)
+})
+
+test('quoteWethTrade preserves a configured V2 bridge path', async () => {
+    const weth = '0x0bd7d308f8e1639fab988df18a8011f41eacad73'
+    const virtual = '0xc6911796042b15d7fa4f6cde69e245ddcd3d9c31'
+    const token = '0xc7c9341765c3beebf0ea2ab05e69b68991a9a470'
+    const factory = '0x8bceaa40b9acdfaedf85adf4ff01f5ad6517937f'
+    const path = [weth, virtual, token]
+    let quotedPath: string[] = []
+
+    const poolHelper = {
+        addresses: { tokens: { WETH: weth } },
+        getBestQuote: async (request: { path: string[] }) => {
+            quotedPath = request.path
+            return {
+                amount: 950n,
+                feeTier: 0,
+                swapFee: 2n,
+                router: '0x89e5db8b5aa49aa85ac63f691524311aeb649eba',
+                exchangeFactory: factory,
+            }
+        },
+        getLotusAdapter: () =>
+            '0xdeb704836165043c172ae80467249ff87429605f',
+        getDexData: () => ({ type: 'v2', kind: 'uniswap' }),
+    } as unknown as PoolHelper
+
+    const route = await quoteWethTrade({
+        feeTier: 0,
+        input: {
+            tokenIn: weth,
+            tokenOut: token,
+            amountIn: 1000n,
+            slippage: 500n,
+            path,
+            exchangeFactory: factory,
+        },
+        poolHelper,
+    })
+
+    assert.deepEqual(quotedPath, path)
+    assert.deepEqual('path' in route.data ? route.data.path : null, path)
+    assert.equal(route.hops, 2)
 })
 
 test('applyV4Toll keeps zero-rounded input toll at zero', () => {

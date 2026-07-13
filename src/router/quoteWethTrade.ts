@@ -24,6 +24,8 @@ export interface QuoteWethTradeParams {
         tokenOut: string
         amountIn: bigint
         slippage: bigint
+        path?: string[]
+        exchangeFactory?: string
     }
     poolHelper: PoolHelper
     finalization?: PoolRouteFinalizationContext
@@ -43,6 +45,7 @@ export async function quoteWethTrade({
     finalization,
 }: QuoteWethTradeParams): Promise<Route> {
     const weth = poolHelper.addresses.tokens.WETH
+    const routePath = input.path ?? [input.tokenIn, input.tokenOut]
 
     const wethIn = compareAddresses(input.tokenIn, weth)
     const wethOut = compareAddresses(input.tokenOut, weth)
@@ -53,8 +56,9 @@ export async function quoteWethTrade({
 
     const quote = await poolHelper.getBestQuote({
         tokenAmount: input.amountIn,
-        path: [input.tokenIn, input.tokenOut],
+        path: routePath,
         slippage: finalization ? 0n : input.slippage,
+        exchangeFactory: input.exchangeFactory,
     })
 
     const adapter = poolHelper.getLotusAdapter(quote.exchangeFactory)
@@ -98,7 +102,7 @@ export async function quoteWethTrade({
                 const data: SwapV2Struct = {
                     amountToSend: input.amountIn,
                     amountToReceive,
-                    path: [input.tokenIn, input.tokenOut],
+                    path: routePath,
                     deadline,
                 }
                 return {
@@ -154,7 +158,7 @@ export async function quoteWethTrade({
             account: finalization.account,
             path:
                 dex.type === 'v2'
-                    ? [input.tokenIn, input.tokenOut]
+                    ? routePath
                     : [
                           {
                               tokenIn: input.tokenIn,
@@ -189,7 +193,7 @@ export async function quoteWethTrade({
             currency: weth,
             amount: finalized.finalTollAmount,
         },
-        hops: 1,
+        hops: routePath.length - 1,
         effectiveSlippageBps: finalized.effectiveSlippageBps,
     }
 }

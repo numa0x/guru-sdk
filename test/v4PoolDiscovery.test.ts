@@ -7,6 +7,7 @@ import {
     _clearV4DiscoveryCache,
     computeV4PoolId,
     discoverV4Paths,
+    findKnownV4BridgeKeys,
     isSafeDiscoveredV4PoolKey,
     stitchNativeBridgeV4Paths,
 } from '../src/router/v4PoolDiscovery'
@@ -17,6 +18,18 @@ const USDG = '0x5fc5360d0400a0fd4f2af552add042d716f1d168'
 const NVDA = '0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec'
 const POOL_INITIALIZE_TOPIC =
     '0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438'
+
+test('provides verified Robinhood USDG/native V4 bridge candidates', () => {
+    const keys = findKnownV4BridgeKeys(4663, USDG, V4_ZERO_ADDRESS)
+    assert.deepEqual(
+        keys.map(({ fee, tickSpacing, hooks }) => ({ fee, tickSpacing, hooks })),
+        [
+            { fee: 25, tickSpacing: 1, hooks: V4_ZERO_ADDRESS },
+            { fee: 100, tickSpacing: 1, hooks: V4_ZERO_ADDRESS },
+            { fee: 500, tickSpacing: 10, hooks: V4_ZERO_ADDRESS },
+        ]
+    )
+})
 
 test('rejects the 92% Robinhood USDG/FIH V4 pool used in the loss transaction', () => {
     assert.equal(
@@ -41,6 +54,29 @@ test('accepts ordinary discovered V4 static fees', () => {
             hooks: V4_ZERO_ADDRESS,
         }),
         true
+    )
+})
+
+test('accepts dynamic V4 fees only when backed by a hook contract', () => {
+    assert.equal(
+        isSafeDiscoveredV4PoolKey({
+            currency0: USDG,
+            currency1: NVDA,
+            fee: 0x800000,
+            tickSpacing: 200,
+            hooks: '0x4e3468951d49f2eea976ed0d6e75ffcb44a9a544',
+        }),
+        true
+    )
+    assert.equal(
+        isSafeDiscoveredV4PoolKey({
+            currency0: USDG,
+            currency1: NVDA,
+            fee: 0x800000,
+            tickSpacing: 200,
+            hooks: V4_ZERO_ADDRESS,
+        }),
+        false
     )
 })
 

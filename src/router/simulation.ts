@@ -128,8 +128,8 @@ function generateCandidates(
  * Finds the maximum amountToReceive that will pass simulation using one bundle call.
  *
  * Strategy: Generate N evenly-spaced candidates between amountWithSlippage (initial slippage)
- * and the worst-case low bound, ordered descending. Simulate all in parallel.
- * Pick the second-highest amount that passes (defensive against marginal candidates).
+ * and the worst-case low bound, ordered descending. Simulate them sequentially and stop
+ * after two pass. The second passing amount is used defensively against marginal candidates.
  */
 export async function findMaxPassingAmountToReceive({
     chainId,
@@ -181,17 +181,14 @@ export async function findMaxPassingAmountToReceive({
         BUNDLE_SIMULATION_CANDIDATES
     )
 
-    const results = await Promise.all(
-        candidates.map((amount) =>
-            simulate(
-                encodeVaultExecute(adapter, buildCallDataForAmount(amount))
-            )
+    const successIndices: number[] = []
+    for (const [index, amount] of candidates.entries()) {
+        const result = await simulate(
+            encodeVaultExecute(adapter, buildCallDataForAmount(amount))
         )
-    )
-
-    const successIndices = results
-        .map((result, index) => (result.success ? index : -1))
-        .filter((index) => index !== -1)
+        if (result.success) successIndices.push(index)
+        if (successIndices.length === 2) break
+    }
 
     if (successIndices.length === 0) {
         console.warn(

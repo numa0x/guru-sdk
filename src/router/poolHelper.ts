@@ -336,7 +336,8 @@ export type QuoteRequest = {
     swapType?: SwapType
     tokenAmount: bigint
     slippage?: bigint
-    path: [string, string]
+    path: string[]
+    exchangeFactory?: string
     /**
      * When true (default), pool discovery only considers DEXes that have a
      * Guru Protocol adapter on this chain — required for any caller that intends to
@@ -348,7 +349,7 @@ export type QuoteRequest = {
 type VersionSpecificQuoteRequest = Omit<QuoteRequest, 'path' | 'slippage'> & {
     exchangeFactory: string
     feeTier: FeeTier
-    path: [string, string]
+    path: string[]
     slippage: bigint
     poolAddress?: string
 }
@@ -759,6 +760,7 @@ export default class PoolHelper {
         slippage = 500n,
         path,
         requireSwappable = true,
+        exchangeFactory,
     }: QuoteRequest): Promise<Quote> {
         const weth = this.addresses.tokens.WETH
         if (!path.some((t) => compareAddresses(t, weth))) {
@@ -770,6 +772,7 @@ export default class PoolHelper {
         const token = path.find((t) => !compareAddresses(t, weth))!
         const pools = await this.getUniswapCompatibleTokenPools(token, {
             swappableOnly: requireSwappable,
+            exchangeFactory,
         })
         if (pools.length === 0) {
             throw new Error(`${PoolHelperError.NO_ROUTE_FOUND}: token=${token}`)
@@ -895,6 +898,11 @@ export default class PoolHelper {
         slippage,
         poolAddress,
     }: VersionSpecificQuoteRequest): Promise<Quote> {
+        if (path.length !== 2) {
+            throw new Error(
+                `${PoolHelperError.EXCHANGE_INCOMPATIBLE}: V3 multi-hop requires per-hop fee tiers`
+            )
+        }
         const [$INPUT, $OUTPUT] = path
 
         const dex = this.getDexData(exchangeFactory)
@@ -1523,10 +1531,12 @@ export default class PoolHelper {
         tokenAmount: bigint,
         swapFeePercentage: bigint,
         swapType: SwapType,
-        path: [string, string]
+        path: string[]
     ): { adjustedTokenAmount: bigint; swapFee: bigint } {
         const weth = this.addresses.tokens.WETH
-        const shouldAdjust = compareAddresses(path[Number(swapType)]!, weth)
+        const tokenEndpoint =
+            swapType === SwapType.EXACT_INPUT ? path[0] : path.at(-1)
+        const shouldAdjust = compareAddresses(tokenEndpoint!, weth)
         if (!shouldAdjust) {
             return { adjustedTokenAmount: tokenAmount, swapFee: 0n }
         }
@@ -1543,17 +1553,16 @@ export default class PoolHelper {
         swapFeePercentage: bigint,
         slippage: bigint,
         swapType: SwapType,
-        path: [string, string]
+        path: string[]
     ): { adjustedQuote: bigint; swapFee: bigint } {
         const weth = this.addresses.tokens.WETH
         const sign = swapType === SwapType.EXACT_INPUT ? -1n : 1n
         const slippageTolerance = calcSlippageTolerance(quote, slippage) * sign
         const quoteWithSlippage = quote + slippageTolerance
 
-        const shouldAdjustQuote = !compareAddresses(
-            path[Number(swapType)]!,
-            weth
-        )
+        const quoteEndpoint =
+            swapType === SwapType.EXACT_INPUT ? path.at(-1) : path[0]
+        const shouldAdjustQuote = compareAddresses(quoteEndpoint!, weth)
         if (!shouldAdjustQuote) {
             return { adjustedQuote: quoteWithSlippage, swapFee: 0n }
         }

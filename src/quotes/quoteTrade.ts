@@ -6,9 +6,11 @@ import {
 } from '../addresses'
 import compareAddresses from '../helpers/compareAddresses'
 import { getRouteIn, getRouteOut, type RouterContext } from '../router'
+import { encodeVaultExecute, type PrefixTx } from '../router/simulation'
 import type { Route } from '../router/types'
 import { quoteTradeSchema } from '../schemas/quoteTrade'
 import buildTradeTx from '../txBuilders/buildTradeTx'
+import buildTradesTx from '../txBuilders/buildTradesTx'
 import { FundLedger__factory, Protocol__factory } from '../typechain'
 
 export interface QuoteTradeParams {
@@ -36,7 +38,81 @@ export interface QuoteTradeContext extends RouterContext {
  * a one-off trade without rebuilding the calldata from `Route`.
  */
 export interface QuoteTradeResult extends Route {
+    routes: Route[]
     txData: TransactionRequest
+}
+
+async function buildCompositeWethRoute(
+    routeParams: {
+        chainId: GuruProtocolChainId
+        tokenIn: string
+        tokenOut: string
+        amountIn: bigint
+        slippageE2?: number
+        account: string
+        vault: string
+    },
+    weth: string,
+    controllerAddress: string,
+    vaultAddress: string,
+    ctx: QuoteTradeContext
+): Promise<Route[]> {
+    const first = await getRouteIn({ ...routeParams, tokenOut: weth }, ctx)
+    const prefixTxs: PrefixTx[] = [
+        {
+            from: controllerAddress,
+            to: vaultAddress,
+            callData: encodeVaultExecute(
+                String(first.adapter),
+                String(first.callData)
+            ),
+        },
+    ]
+    const second = await getRouteIn(
+        {
+            ...routeParams,
+            tokenIn: weth,
+            amountIn: BigInt(first.data.amountToReceive),
+            prefixTxs,
+        },
+        ctx
+    )
+    return [first, second]
+}
+
+export async function bestOfDirectAndComposite(
+    direct: () => Promise<Route>,
+    composite: () => Promise<Route[]>
+): Promise<Route[]> {
+    const [directResult, compositeResult] = await Promise.allSettled([
+        direct(),
+        composite(),
+    ])
+
+    if (
+        directResult.status === 'rejected' &&
+        directResult.reason instanceof Error &&
+        (directResult.reason.message.includes('TOKEN_LOCKED_BY_V4_HOOK') ||
+            directResult.reason.message.includes(
+                'UNISWAP_V4_HOOK_ROUTE_REVERTED'
+            ))
+    ) {
+        throw directResult.reason
+    }
+
+    if (
+        directResult.status === 'fulfilled' &&
+        compositeResult.status === 'fulfilled'
+    ) {
+        const compositeRoute = compositeResult.value.at(-1)!
+        return BigInt(directResult.value.data.amountToReceive) >=
+            BigInt(compositeRoute.data.amountToReceive)
+            ? [directResult.value]
+            : compositeResult.value
+    }
+    if (directResult.status === 'fulfilled') return [directResult.value]
+    if (compositeResult.status === 'fulfilled') return compositeResult.value
+    throw directResult.reason
 }
 
 export default async function quoteTrade(
@@ -82,30 +158,59 @@ export default async function quoteTrade(
         ledger.manager(),
     ])
 
-    const route = await getRoute(
-        {
-            chainId: ctx.chainId,
-            tokenIn: parsed.tokenIn,
-            tokenOut: parsed.tokenOut,
-            amountIn: parsed.amountIn,
-            slippageE2:
-                parsed.maxSlippage != null
-                    ? Number(parsed.maxSlippage / 10n)
-                    : undefined,
-            account: vaultAddress,
-            vault: vaultAddress,
-        },
-        ctx
-    )
+    const slippageE2 =
+        parsed.maxSlippage != null
+            ? Number(parsed.maxSlippage / 10n)
+            : undefined
+    const routeParams = {
+        chainId: ctx.chainId,
+        tokenIn: parsed.tokenIn,
+        tokenOut: parsed.tokenOut,
+        amountIn: parsed.amountIn,
+        slippageE2,
+        account: vaultAddress,
+        vault: vaultAddress,
+    } as const
+
+    const weth = addresses.tokens.WETH
+    const routes =
+        compareAddresses(parsed.tokenIn, weth) ||
+        compareAddresses(parsed.tokenOut, weth)
+            ? [await getRoute(routeParams, ctx)]
+            : await bestOfDirectAndComposite(
+                  () => getRoute(routeParams, ctx),
+                  () =>
+                      buildCompositeWethRoute(
+                          routeParams,
+                          weth,
+                          controllerAddress,
+                          vaultAddress,
+                          ctx
+                      )
+              )
+
+    const route = routes.at(-1)!
+    const txData =
+        routes.length === 1
+            ? buildTradeTx({
+                  controller: controllerAddress,
+                  ledger: parsed.ledger,
+                  adapter: String(route.adapter),
+                  callData: String(route.callData),
+                  from: manager,
+              })
+            : buildTradesTx({
+                  controller: controllerAddress,
+                  ledger: parsed.ledger,
+                  adapters: routes.map((item) => String(item.adapter)),
+                  callData: routes.map((item) => String(item.callData)),
+                  from: manager,
+              })
 
     return {
         ...route,
-        txData: buildTradeTx({
-            controller: controllerAddress,
-            ledger: parsed.ledger,
-            adapter: String(route.adapter),
-            callData: String(route.callData),
-            from: manager,
-        }),
+        routes,
+        hops: routes.reduce((sum, item) => sum + item.hops, 0),
+        txData,
     }
 }

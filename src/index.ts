@@ -19,6 +19,7 @@ export type {
     BuildTradeTxParams,
     BuildWithdrawTxParams,
 } from './txBuilders'
+export type { BuildTradesTxParams } from './txBuilders/buildTradesTx'
 
 export type {
     QuoteDepositParams,

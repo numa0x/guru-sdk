@@ -14,6 +14,38 @@ export interface GetFallbackRouteContext {
     getSwapFeePercentage: () => Promise<bigint>
 }
 
+async function tryWethBridgeV2Route(
+    poolHelper: PoolHelper,
+    input: {
+        tokenIn: string
+        tokenOut: string
+        amountIn: bigint
+        slippage: bigint
+    },
+    finalization: Parameters<typeof quoteWethTrade>[0]['finalization']
+): Promise<Route | null> {
+    const factory = poolHelper.addresses.factories.uniswapV2
+    if (!factory || !poolHelper.addresses.adapters.uniswapV2) return null
+
+    for (const bridge of poolHelper.addresses.routeBridges ?? []) {
+        try {
+            return await quoteWethTrade({
+                feeTier: 0,
+                input: {
+                    ...input,
+                    path: [input.tokenIn, bridge, input.tokenOut],
+                    exchangeFactory: factory,
+                },
+                poolHelper,
+                finalization,
+            })
+        } catch {
+            // Try the next configured bridge.
+        }
+    }
+    return null
+}
+
 async function tryDirectAerodromeV2RouteIn(
     poolHelper: PoolHelper,
     {
@@ -117,16 +149,26 @@ export async function getFallbackRouteIn(
     }
 
     if (compareAddresses(tokenIn, weth) || compareAddresses(tokenOut, weth)) {
-        const pairedToken = compareAddresses(tokenIn, weth) ? tokenOut : tokenIn
-        const coinTokenPool =
-            await poolHelper.getUniswapCompatibleTokenPool(pairedToken)
+        try {
+            const pairedToken = compareAddresses(tokenIn, weth) ? tokenOut : tokenIn
+            const coinTokenPool =
+                await poolHelper.getUniswapCompatibleTokenPool(pairedToken)
 
-        return quoteWethTrade({
-            feeTier: coinTokenPool.feeTier,
-            input: { tokenIn, tokenOut, amountIn, slippage },
-            poolHelper,
-            finalization,
-        })
+            return await quoteWethTrade({
+                feeTier: coinTokenPool.feeTier,
+                input: { tokenIn, tokenOut, amountIn, slippage },
+                poolHelper,
+                finalization,
+            })
+        } catch (directError) {
+            const bridged = await tryWethBridgeV2Route(
+                poolHelper,
+                { tokenIn, tokenOut, amountIn, slippage },
+                finalization
+            )
+            if (bridged) return bridged
+            throw directError
+        }
     }
 
     const directAerodrome = await tryDirectAerodromeV2RouteIn(poolHelper, {
@@ -184,18 +226,26 @@ export async function getFallbackRouteOut(
     }
 
     if (compareAddresses(tokenIn, weth) || compareAddresses(tokenOut, weth)) {
-        const pairedToken = compareAddresses(tokenIn, weth) ? tokenOut : tokenIn
-        const coinTokenPool =
-            await poolHelper.getUniswapCompatibleTokenPool(pairedToken)
+        try {
+            const pairedToken = compareAddresses(tokenIn, weth) ? tokenOut : tokenIn
+            const coinTokenPool =
+                await poolHelper.getUniswapCompatibleTokenPool(pairedToken)
 
-        const route = await quoteWethTrade({
-            feeTier: coinTokenPool.feeTier,
-            input: { tokenIn, tokenOut, amountIn, slippage },
-            poolHelper,
-            finalization,
-        })
-
-        return { ...route, hops: 1 }
+            return await quoteWethTrade({
+                feeTier: coinTokenPool.feeTier,
+                input: { tokenIn, tokenOut, amountIn, slippage },
+                poolHelper,
+                finalization,
+            })
+        } catch (directError) {
+            const bridged = await tryWethBridgeV2Route(
+                poolHelper,
+                { tokenIn, tokenOut, amountIn, slippage },
+                finalization
+            )
+            if (bridged) return bridged
+            throw directError
+        }
     }
 
     const directAerodrome = await tryDirectAerodromeV2RouteOut(poolHelper, {

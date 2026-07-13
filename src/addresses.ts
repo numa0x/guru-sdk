@@ -40,6 +40,7 @@ export type GuruProtocolAddresses = {
     readonly factories: Readonly<Partial<Record<FactoryKey, string>>>
     readonly routers: Readonly<Partial<Record<RouterKey, string>>>
     readonly quoters: Readonly<Partial<Record<QuoterKey, string>>>
+    readonly routeBridges?: readonly string[]
 
     readonly tokens: Readonly<{
         WETH: string
@@ -203,6 +204,8 @@ const ROBINHOOD: GuruProtocolAddresses = {
         uniswapV3: '0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7',
         uniswapV4: '0x8dc178efb8111bb0973dd9d722ebeff267c98f94',
     },
+
+    routeBridges: ['0xc6911796042b15d7fa4f6cde69e245ddcd3d9c31'], // VIRTUAL
 
     tokens: {
         WETH: '0x0bd7d308f8e1639fab988df18a8011f41eacad73',
