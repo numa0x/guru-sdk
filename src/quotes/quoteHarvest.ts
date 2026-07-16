@@ -72,9 +72,21 @@ export interface QuoteHarvestResult {
     decodeLogs: (logs: SimulationLog[]) => QuoteHarvestLogs | null
 }
 
-// totalValueLocked / tokenPrice are tracked in USDT (1e6) units; the on-chain
-// fraction is 1e18-based, so we lift to 1e18 with this normalizer.
-const NORMALIZER = BigInt(1e12)
+export interface HarvestProjectionParams {
+    tvl: bigint
+    totalVirtualPrincipal: bigint
+    profitFeeBps: bigint
+    managementFee: bigint
+}
+
+export interface HarvestProjection {
+    harvestProjection: bigint
+    harvestableFraction: bigint
+}
+
+// Harvest events report fees in USD-1e18 while the current stablecoin quote
+// response exposes 6-decimal coin units.
+const USD_1E18_TO_STABLECOIN_1E6 = 10n ** 12n
 const ONE_DAY_IN_MS = 86400n * 1000n
 const slippageE2For = (
     settings: QuoteHarvestParams['slippageSettings'],
@@ -82,6 +94,24 @@ const slippageE2For = (
 ): number | undefined => {
     const slippage = settings?.[token.toLowerCase()]
     return slippage == null ? undefined : Number(slippage / 10n)
+}
+
+export function computeHarvestProjection({
+    tvl,
+    totalVirtualPrincipal,
+    profitFeeBps,
+    managementFee,
+}: HarvestProjectionParams): HarvestProjection {
+    const chargeable =
+        tvl > totalVirtualPrincipal ? tvl - totalVirtualPrincipal : 0n
+    const harvestProjection =
+        managementFee + (profitFeeBps * chargeable) / MAX_BPS
+    const harvestableFraction =
+        tvl > 0n && harvestProjection > 0n
+            ? (harvestProjection * UNIT) / tvl
+            : 0n
+
+    return { harvestProjection, harvestableFraction }
 }
 
 export default async function quoteHarvest(
@@ -115,8 +145,7 @@ export default async function quoteHarvest(
         manager,
         controllerAddress,
         profitFeeBps,
-        totalPrincipal,
-        totalVirtualBuffer,
+        totalVirtualPrincipal,
         latestManagementFeeTimestamp,
     ] = await Promise.all([
         fetcher.fetchFundData(ledger),
@@ -124,12 +153,11 @@ export default async function quoteHarvest(
         ledger.manager(),
         ledger.controller(),
         ledger.profitFeeBps(),
-        ledger.totalPrincipal(),
-        ledger.totalVirtualBuffer(),
+        ledger.totalVirtualPrincipal(),
         ledger.latestManagementFeeTimestamp(),
     ])
 
-    const tvl = fundData.totalValueLocked * NORMALIZER
+    const tvl = fundData.totalValueLocked
     const guruWeight1e18 =
         ((fundData.assets.find((asset) =>
             compareAddresses(asset.token.address, GURU_TOKEN_MAINNET)
@@ -151,16 +179,15 @@ export default async function quoteHarvest(
             ? (fundData.tokenPrice * ledgerBalance) / UNIT
             : 0n
 
-    const feeApplicableAmount = tvl - (totalPrincipal + totalVirtualBuffer)
-    const harvestProjection =
-        managementFee + (profitFeeBps * feeApplicableAmount) / MAX_BPS
+    const { harvestProjection, harvestableFraction } =
+        computeHarvestProjection({
+            tvl,
+            totalVirtualPrincipal,
+            profitFeeBps,
+            managementFee,
+        })
 
-    const harvestableFraction =
-        tvl > 0n && harvestProjection > 0n
-            ? (harvestProjection * UNIT) / tvl
-            : 0n
-
-    const isNoOp = harvestProjection <= 0n && managementFee <= 0n
+    const isNoOp = harvestProjection === 0n
 
     // For every fund asset, swap the harvestable fraction into the requested
     // stablecoin. Assets already denominated in `coin` are tagged as no-op
@@ -213,7 +240,10 @@ export default async function quoteHarvest(
                 controller.interface,
                 controller.getEvent('Harvested')
             )
-            return { harvestableAmount: harvested.managerFee / NORMALIZER }
+            return {
+                harvestableAmount:
+                    harvested.managerFee / USD_1E18_TO_STABLECOIN_1E6,
+            }
         } catch {
             return null
         }
