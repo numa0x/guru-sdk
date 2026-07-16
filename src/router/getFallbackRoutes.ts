@@ -81,6 +81,97 @@ async function tryDirectAerodromeV2RouteIn(
     }
 }
 
+async function tryDirectAerodromeV3GaugeCapsRoute(
+    poolHelper: PoolHelper,
+    {
+        tokenIn,
+        tokenOut,
+        amountIn,
+        slippage,
+        finalization,
+    }: {
+        tokenIn: string
+        tokenOut: string
+        amountIn: bigint
+        slippage: bigint
+        finalization: Parameters<
+            PoolHelper['getDirectAerodromeV3StableQuote']
+        >[0]['finalization']
+    }
+): Promise<Route | null> {
+    const factory = poolHelper.addresses.factories.aerodromeV3GaugeCaps
+    if (
+        !factory ||
+        !poolHelper.addresses.adapters.aerodromeV3GaugeCaps
+    ) {
+        return null
+    }
+
+    try {
+        const route = await poolHelper.getDirectAerodromeV3StableQuote({
+            path: [tokenIn, tokenOut],
+            inputAmount: amountIn,
+            slippage,
+            exchangeFactory: factory,
+            finalization,
+        })
+        return { ...route, hops: 1 }
+    } catch {
+        return null
+    }
+}
+
+function bestDirectRoute(routes: (Route | null)[]): Route | null {
+    return routes.reduce<Route | null>((best, route) => {
+        if (!route) return best
+        if (!best) return route
+        return BigInt(route.data.amountToReceive) >
+            BigInt(best.data.amountToReceive)
+            ? route
+            : best
+    }, null)
+}
+
+async function getDirectGaugeCapsRoute(
+    params: RouteSearchParams,
+    ctx: GetFallbackRouteContext
+): Promise<Route> {
+    const { chainId, tokenIn, tokenOut, amountIn, slippageE2 } = params
+    const slippage = BigInt(slippageE2 ?? 500) * 10n
+    const poolHelper = new PoolHelper({
+        chainId,
+        provider: ctx.provider,
+        getSwapFeePercentage: ctx.getSwapFeePercentage,
+    })
+    const [controller, blockNumber] = await Promise.all([
+        FundVault__factory.connect(params.vault, ctx.provider).controller(),
+        ctx.provider.getBlockNumber(),
+    ])
+    const route = await tryDirectAerodromeV3GaugeCapsRoute(poolHelper, {
+        tokenIn,
+        tokenOut,
+        amountIn,
+        slippage,
+        finalization: {
+            blockNumber,
+            controller,
+            vault: params.vault,
+            account: params.account,
+            simulator: ctx.simulator,
+            prefixTxs: params.prefixTxs,
+            maxSlippageE3: slippage,
+        },
+    })
+    if (!route) throw new Error('NO_GAUGE_CAPS_ROUTE_FOUND')
+    return route
+}
+
+/** Direct Gauge Caps candidate used to compete with an otherwise-valid aggregator route. */
+export const getDirectGaugeCapsRouteIn = getDirectGaugeCapsRoute
+
+/** Exact-input direction is identical; the adapter decides the toll side from path endpoints. */
+export const getDirectGaugeCapsRouteOut = getDirectGaugeCapsRoute
+
 async function tryDirectAerodromeV2RouteOut(
     poolHelper: PoolHelper,
     {
@@ -171,13 +262,24 @@ export async function getFallbackRouteIn(
         }
     }
 
-    const directAerodrome = await tryDirectAerodromeV2RouteIn(poolHelper, {
-        tokenIn,
-        tokenOut,
-        amountIn,
-        slippage,
-        finalization,
-    })
+    const directAerodrome = bestDirectRoute(
+        await Promise.all([
+            tryDirectAerodromeV3GaugeCapsRoute(poolHelper, {
+                tokenIn,
+                tokenOut,
+                amountIn,
+                slippage,
+                finalization,
+            }),
+            tryDirectAerodromeV2RouteIn(poolHelper, {
+                tokenIn,
+                tokenOut,
+                amountIn,
+                slippage,
+                finalization,
+            }),
+        ])
+    )
     if (directAerodrome) return directAerodrome
 
     const pool = await poolHelper.getUniswapCompatibleTokenPool(tokenOut)
@@ -248,13 +350,24 @@ export async function getFallbackRouteOut(
         }
     }
 
-    const directAerodrome = await tryDirectAerodromeV2RouteOut(poolHelper, {
-        tokenIn,
-        tokenOut,
-        amountIn,
-        slippage,
-        finalization,
-    })
+    const directAerodrome = bestDirectRoute(
+        await Promise.all([
+            tryDirectAerodromeV3GaugeCapsRoute(poolHelper, {
+                tokenIn,
+                tokenOut,
+                amountIn,
+                slippage,
+                finalization,
+            }),
+            tryDirectAerodromeV2RouteOut(poolHelper, {
+                tokenIn,
+                tokenOut,
+                amountIn,
+                slippage,
+                finalization,
+            }),
+        ])
+    )
     if (directAerodrome) return directAerodrome
 
     const pool = await poolHelper.getUniswapCompatibleTokenPool(tokenIn)

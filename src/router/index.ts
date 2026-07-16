@@ -8,6 +8,8 @@ import {
 import compareAddresses from '../helpers/compareAddresses'
 import { Token } from '../helpers/Token'
 import {
+    getDirectGaugeCapsRouteIn,
+    getDirectGaugeCapsRouteOut,
     getFallbackRouteIn,
     getFallbackRouteOut,
     type GetFallbackRouteContext,
@@ -61,6 +63,9 @@ const AERO_V3_QUOTER_ABI = [
 const UNISWAP_V3_FEES = [100, 500, 3000, 10000] as const
 const PANCAKE_V3_FEES = [100, 500, 2500, 10000] as const
 const AERODROME_V3_TICK_SPACINGS = [1, 50, 100, 200] as const
+const AERODROME_V3_GAUGE_CAPS_TICK_SPACINGS = [
+    1, 10, 50, 100, 200, 500, 2000,
+] as const
 
 interface V2FactoryLike {
     getPair: (tokenA: string, tokenB: string) => Promise<string>
@@ -245,7 +250,18 @@ export async function getRouteIn(
         getSwapFeePercentage: ctx.getSwapFeePercentage,
     }
     try {
-        return await getVeloraRoute(params, veloraCtx)
+        const velora = await getVeloraRoute(params, veloraCtx)
+        if (params.chainId !== 8453) return velora
+
+        const gaugeCaps = await getDirectGaugeCapsRouteIn(
+            params,
+            fallbackCtx
+        ).catch(() => null)
+        return gaugeCaps &&
+            BigInt(gaugeCaps.data.amountToReceive) >
+                BigInt(velora.data.amountToReceive)
+            ? gaugeCaps
+            : velora
     } catch {
         return bestOfV4AndFallback(
             () => getUniswapV4Route(params, v4Ctx),
@@ -273,7 +289,18 @@ export async function getRouteOut(
         getSwapFeePercentage: ctx.getSwapFeePercentage,
     }
     try {
-        return await getVeloraRoute(params, veloraCtx)
+        const velora = await getVeloraRoute(params, veloraCtx)
+        if (params.chainId !== 8453) return velora
+
+        const gaugeCaps = await getDirectGaugeCapsRouteOut(
+            params,
+            fallbackCtx
+        ).catch(() => null)
+        return gaugeCaps &&
+            BigInt(gaugeCaps.data.amountToReceive) >
+                BigInt(velora.data.amountToReceive)
+            ? gaugeCaps
+            : velora
     } catch {
         return bestOfV4AndFallback(
             () => getUniswapV4Route(params, v4Ctx),
@@ -596,46 +623,66 @@ async function _quoteDirectAerodromeV3StablePool(
     poolHelper: PoolHelper,
     provider: Provider
 ): Promise<bigint> {
-    const quoterAddress = poolHelper.addresses.quoters.aerodromeV3
-    if (!quoterAddress) return 0n
-
-    const factories = [
-        poolHelper.addresses.factories.aerodromeV3,
-        poolHelper.addresses.factories.aerodromeV3Bis,
-    ].filter((factory): factory is string => Boolean(factory))
-    if (factories.length === 0) return 0n
-
-    const quoter = new Contract(
-        quoterAddress,
-        AERO_V3_QUOTER_ABI,
-        provider
-    ) as unknown as AeroV3QuoterLike
+    const generations: {
+        factories: (string | undefined)[]
+        quoter: string | undefined
+        tickSpacings: readonly number[]
+    }[] = [
+        {
+            factories: [
+                poolHelper.addresses.factories.aerodromeV3,
+                poolHelper.addresses.factories.aerodromeV3Bis,
+            ],
+            quoter: poolHelper.addresses.quoters.aerodromeV3,
+            tickSpacings: AERODROME_V3_TICK_SPACINGS,
+        },
+        {
+            factories: [
+                poolHelper.addresses.factories.aerodromeV3GaugeCaps,
+            ],
+            quoter: poolHelper.addresses.quoters.aerodromeV3GaugeCaps,
+            tickSpacings: AERODROME_V3_GAUGE_CAPS_TICK_SPACINGS,
+        },
+    ]
 
     let best = 0n
     await Promise.all(
-        factories.flatMap((factoryAddress) => {
-            const factory = new Contract(
-                factoryAddress,
-                AERO_V3_FACTORY_ABI,
+        generations.flatMap((generation) => {
+            if (!generation.quoter) return []
+            const quoter = new Contract(
+                generation.quoter,
+                AERO_V3_QUOTER_ABI,
                 provider
-            ) as unknown as AeroV3FactoryLike
+            ) as unknown as AeroV3QuoterLike
 
-            return AERODROME_V3_TICK_SPACINGS.map(async (tickSpacing) => {
-                const poolAddress = await factory
-                    .getPool(token, stable, tickSpacing)
-                    .catch(() => ZeroAddress)
-                if (poolAddress === ZeroAddress) return
+            return generation.factories
+                .filter((factory): factory is string => Boolean(factory))
+                .flatMap((factoryAddress) => {
+                    const factory = new Contract(
+                        factoryAddress,
+                        AERO_V3_FACTORY_ABI,
+                        provider
+                    ) as unknown as AeroV3FactoryLike
 
-                const quote = await quoter.quoteExactInputSingle.staticCall({
-                    tokenIn: token,
-                    tokenOut: stable,
-                    amountIn: oneToken,
-                    tickSpacing: BigInt(tickSpacing),
-                    sqrtPriceLimitX96: 0n,
-                }).catch(() => null)
-                const amountOut = quote?.amountOut ?? 0n
-                if (amountOut > best) best = amountOut
-            })
+                    return generation.tickSpacings.map(
+                        async (tickSpacing) => {
+                            const poolAddress = await factory
+                                .getPool(token, stable, tickSpacing)
+                                .catch(() => ZeroAddress)
+                            if (poolAddress === ZeroAddress) return
+
+                            const quote = await quoter.quoteExactInputSingle.staticCall({
+                                tokenIn: token,
+                                tokenOut: stable,
+                                amountIn: oneToken,
+                                tickSpacing: BigInt(tickSpacing),
+                                sqrtPriceLimitX96: 0n,
+                            }).catch(() => null)
+                            const amountOut = quote?.amountOut ?? 0n
+                            if (amountOut > best) best = amountOut
+                        }
+                    )
+                })
         })
     )
 

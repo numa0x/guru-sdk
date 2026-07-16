@@ -9,12 +9,18 @@ type AdapterKey =
     | 'pancakeV3'
     | 'aerodromeV2'
     | 'aerodromeV3'
+    | 'aerodromeV3GaugeCaps'
 
 type FactoryKey = AdapterKey | 'aerodromeV3Bis'
 
 type RouterKey = AdapterKey
 
-type QuoterKey = 'uniswapV3' | 'uniswapV4' | 'pancakeV3' | 'aerodromeV3'
+type QuoterKey =
+    | 'uniswapV3'
+    | 'uniswapV4'
+    | 'pancakeV3'
+    | 'aerodromeV3'
+    | 'aerodromeV3GaugeCaps'
 
 export type GuruProtocolAddresses = {
     readonly chainId: GuruProtocolChainId
@@ -133,6 +139,7 @@ const BASE: GuruProtocolAddresses = {
     adapters: {
         aerodromeV2: '0x581aa0ea01387e1b85d8bc3e14ec3475dee9c334',
         aerodromeV3: '0x3d95d6cf7f41c905ec132020d3a39898a20977ae',
+        aerodromeV3GaugeCaps: '0xc9df9c49f695153520e864b3bd98d354d6019f11',
         pancakeV3: '0x2d993c905426994a7dbb7115ca460ef33e384906',
         uniswapV2: '0xefccd55c1c4a471d72f37f84d65361ed708d22d7',
         // SwapRouter02 variant — see `UniswapV3SwapRouter02Adapter`.
@@ -144,6 +151,7 @@ const BASE: GuruProtocolAddresses = {
         aerodromeV2: '0x420dd381b31aef6683db6b902084cb0ffece40da',
         aerodromeV3: '0x5e7bb104d84c7cb9b682aac2f3d509f5f406809a',
         aerodromeV3Bis: '0x9592cd9b267748cbfbde90ac9f7df3c437a6d51b',
+        aerodromeV3GaugeCaps: '0xade65c38cd4849adba595a4323a8c7ddfe89716a',
         uniswapV2: '0x8909dc15e40173ff4699343b6eb8132c65e18ec6',
         uniswapV3: '0x33128a8fc17869897dce68ed026d694621f6fdfd',
         pancakeV3: '0x0bfbcf9fa4f9c56b0f40a671ad40e0805a091865',
@@ -152,12 +160,14 @@ const BASE: GuruProtocolAddresses = {
     routers: {
         aerodromeV2: '0xcf77a3ba9a5ca399b7c97c74d54e5b1beb874e43',
         aerodromeV3: '0xbe6d8f0d05cc4be24d5167a3ef062215be6d18a5',
+        aerodromeV3GaugeCaps: '0xcbbb8035cac7d4b3ca7abb74cf7bdf900215ce0d',
         uniswapV2: '0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24',
         uniswapV3: '0x2626664c2603336e57b271c5c0b26f421741e481',
     },
 
     quoters: {
         aerodromeV3: '0x254cf9e1e6e233aa1ac962cb9b05b2cfeaae15b0',
+        aerodromeV3GaugeCaps: '0x3d4c22254f86f64b7ec90ab8f7aec1fbfd271c6c',
         uniswapV3: '0x3d4e44eb1374240ce5f1b871ab261cd16335b76a',
         uniswapV4: '0x0d5e0f971ed27fbff6c2837bf31316121532048d',
     },

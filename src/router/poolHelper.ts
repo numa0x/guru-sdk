@@ -16,6 +16,7 @@ import {
 import compareAddresses from '../helpers/compareAddresses'
 import { Token } from '../helpers/Token'
 import {
+    AerodromeV3Adapter__factory,
     AerodromeV2Adapter__factory,
     IPancakeQuoterV2__factory,
     UniswapV2Adapter__factory,
@@ -226,6 +227,7 @@ type DexTable = Record<string, DexData>
 const UNIV3_FEE_TIERS = [100, 500, 3000, 10000]
 const PANCAKEV3_FEE_TIERS = [100, 500, 2500, 10000]
 const AEROV3_FEE_TIERS = [1, 50, 100, 200] // Aerodrome uses tick spacing
+const AEROV3_GAUGE_CAPS_TICK_SPACINGS = [1, 10, 50, 100, 200, 500, 2000]
 
 function buildDexTable(addresses: GuruProtocolAddresses): DexTable {
     const table: DexTable = {}
@@ -293,6 +295,19 @@ function buildDexTable(addresses: GuruProtocolAddresses): DexTable {
         // router/quoter/adapter with the primary CL factory.
         if (addresses.factories.aerodromeV3Bis) {
             table[addresses.factories.aerodromeV3Bis.toLowerCase()] = v3
+        }
+    }
+    if (
+        addresses.factories.aerodromeV3GaugeCaps &&
+        addresses.quoters.aerodromeV3GaugeCaps
+    ) {
+        table[addresses.factories.aerodromeV3GaugeCaps.toLowerCase()] = {
+            type: 'v3',
+            router: addresses.routers.aerodromeV3GaugeCaps,
+            quoter: addresses.quoters.aerodromeV3GaugeCaps,
+            feeTiers: AEROV3_GAUGE_CAPS_TICK_SPACINGS,
+            kind: 'aerodrome',
+            swappable: Boolean(addresses.adapters.aerodromeV3GaugeCaps),
         }
     }
 
@@ -1026,6 +1041,159 @@ export default class PoolHelper {
     }
 
     /**
+     * Quote and encode a direct Aerodrome V3 exact-input route. This is kept
+     * separate from the legacy WETH-bridge fallback because Slipstream's
+     * quoter has no multi-hop quoteExactInput(bytes) surface.
+     */
+    public async getDirectAerodromeV3StableQuote({
+        path,
+        inputAmount,
+        slippage = 500n,
+        exchangeFactory,
+        finalization,
+    }: StableQuoteRequest): Promise<StableQuoteResult> {
+        if (path.length !== 2) {
+            throw new Error(
+                `${PoolHelperError.EXCHANGE_INCOMPATIBLE}: direct Aerodrome V3 route requires two tokens`
+            )
+        }
+
+        const dexData = this.getDexData(exchangeFactory)
+        if (dexData.type !== 'v3' || dexData.kind !== 'aerodrome') {
+            throw new Error(
+                `${PoolHelperError.EXCHANGE_INCOMPATIBLE}: factory=${exchangeFactory}`
+            )
+        }
+
+        const adapter = this.getLotusAdapter(exchangeFactory)
+        const swapFeePercentage = await this.getSwapFeePercentage()
+        const tollTokens = [
+            this.addresses.tokens.WETH,
+            this.addresses.tokens.USDC,
+            this.addresses.tokens.USDT,
+            this.addresses.tokens.USDG,
+        ].filter((token): token is string => Boolean(token))
+        const tollOnInput = tollTokens.some((token) =>
+            compareAddresses(token, path[0])
+        )
+        const tollOnOutput =
+            !tollOnInput &&
+            tollTokens.some((token) => compareAddresses(token, path[1]))
+        if (!tollOnInput && !tollOnOutput) {
+            throw new Error(
+                `${PoolHelperError.EXCHANGE_INCOMPATIBLE}: direct route has no toll-applicable endpoint`
+            )
+        }
+
+        const inputToll = tollOnInput
+            ? (inputAmount * swapFeePercentage) / PERCENT_DENOMINATOR
+            : 0n
+        const amountForRouter = inputAmount - inputToll
+        const factory = connect<AeroV3FactoryLike>(
+            exchangeFactory,
+            AERO_V3_FACTORY_ABI,
+            this.provider
+        )
+        const quoter = connect<AeroV3QuoterLike>(
+            dexData.quoter,
+            AERO_V3_QUOTER_ABI,
+            this.provider
+        )
+
+        let best:
+            | { amountOut: bigint; tickSpacing: number; pool: string }
+            | undefined
+        await Promise.all(
+            dexData.feeTiers.map(async (tickSpacing) => {
+                try {
+                    const pool = await factory.getPool(
+                        path[0],
+                        path[1],
+                        tickSpacing
+                    )
+                    if (pool === ZeroAddress) return
+                    const quote = await quoter.quoteExactInputSingle.staticCall({
+                        tokenIn: path[0],
+                        tokenOut: path[1],
+                        amountIn: amountForRouter,
+                        tickSpacing: BigInt(tickSpacing),
+                        sqrtPriceLimitX96: 0n,
+                    })
+                    if (!best || quote.amountOut > best.amountOut) {
+                        best = { amountOut: quote.amountOut, tickSpacing, pool }
+                    }
+                } catch {
+                    // A generation may support a spacing without this pair having a live pool.
+                }
+            })
+        )
+        if (!best) {
+            throw new Error(
+                `${PoolHelperError.NO_ROUTE_FOUND}: factory=${exchangeFactory}`
+            )
+        }
+
+        const selected = best as {
+            amountOut: bigint
+            tickSpacing: number
+            pool: string
+        }
+        const netAmountOut = tollOnOutput
+            ? selected.amountOut -
+              (selected.amountOut * swapFeePercentage) / PERCENT_DENOMINATOR
+            : selected.amountOut
+        const pathBytes = solidityPacked(
+            ['address', 'int24', 'address'],
+            [path[0], selected.tickSpacing, path[1]]
+        )
+        const deadline = Math.floor((Date.now() + 1000 * 60 * 5) / 1000)
+        const routePath: V3Path = [
+            {
+                tokenIn: path[0],
+                tokenOut: path[1],
+                fee: String(selected.tickSpacing),
+            },
+        ]
+        const finalized = await this._finalizeExecutableQuote({
+            finalization,
+            adapter,
+            path: routePath,
+            amountToSend: inputAmount,
+            amountQuoted: netAmountOut,
+            initialTollAmount: inputToll,
+            outputTollE3: tollOnOutput ? swapFeePercentage : 0n,
+            slippage,
+            buildSwap: (amountToReceive) => {
+                const data: SwapV3Struct = {
+                    amountToSend: inputAmount,
+                    amountToReceive,
+                    path: pathBytes,
+                    deadline,
+                }
+                return {
+                    data,
+                    callData:
+                        AerodromeV3Adapter__factory.createInterface().encodeFunctionData(
+                            'executeSwap',
+                            [data]
+                        ),
+                }
+            },
+        })
+
+        return {
+            adapter,
+            data: finalized.data,
+            callData: finalized.callData,
+            toll: {
+                currency: tollOnInput ? path[0] : path[1],
+                amount: finalized.tollAmount,
+            },
+            effectiveSlippageBps: finalized.effectiveSlippageBps,
+        }
+    }
+
+    /**
      * @param path `[stable, WETH, token]`
      * @returns adapter, encoded swap, and the toll taken on the input.
      */
@@ -1514,6 +1682,7 @@ export default class PoolHelper {
                 [f.aerodromeV2, a.aerodromeV2],
                 [f.aerodromeV3, a.aerodromeV3],
                 [f.aerodromeV3Bis, a.aerodromeV3],
+                [f.aerodromeV3GaugeCaps, a.aerodromeV3GaugeCaps],
             ] as const
         ).find(
             ([factory]) => factory && factory.toLowerCase() === factoryLower

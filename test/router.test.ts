@@ -7,8 +7,7 @@ import { applyV4Toll } from '../src/router/getUniswapV4Route'
 import type { Route } from '../src/router'
 import { SUPPORTED_DEXS } from '../src/router/constants'
 import { extractPathFromResponse } from '../src/router/pathCache'
-import type PoolHelper from '../src/router/poolHelper'
-import { rankUsablePools } from '../src/router/poolHelper'
+import PoolHelper, { rankUsablePools } from '../src/router/poolHelper'
 import { quoteWethTrade } from '../src/router/quoteWethTrade'
 import { findMaxPassingAmountToReceive } from '../src/router/simulation'
 import { buildVeloraDexConfig } from '../src/router/velora'
@@ -396,6 +395,33 @@ test('Base Velora config enables Aerodrome routes', () => {
     assert.equal(
         cfg.AerodromeV3?.quoterAddress,
         addresses.quoters.aerodromeV3
+    )
+})
+
+test('Gauge Caps is a distinct Base generation with scoped tick spacings', () => {
+    const addresses = getGuruProtocolAddresses(8453)
+    const helper = new PoolHelper({
+        chainId: 8453,
+        provider: {} as never,
+        getSwapFeePercentage: async () => 200n,
+    })
+
+    const legacy = helper.getDexData(addresses.factories.aerodromeV3!)
+    const gaugeCaps = helper.getDexData(
+        addresses.factories.aerodromeV3GaugeCaps!
+    )
+
+    assert.equal(
+        helper.getLotusAdapter(addresses.factories.aerodromeV3GaugeCaps!),
+        addresses.adapters.aerodromeV3GaugeCaps
+    )
+    assert.deepEqual(
+        legacy.type === 'v3' ? legacy.feeTiers : [],
+        [1, 50, 100, 200]
+    )
+    assert.deepEqual(
+        gaugeCaps.type === 'v3' ? gaugeCaps.feeTiers : [],
+        [1, 10, 50, 100, 200, 500, 2000]
     )
 })
 
